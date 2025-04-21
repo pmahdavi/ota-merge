@@ -298,6 +298,16 @@ class ImmutableMap(Generic[T_K, T_V]):
     def values(self) -> Iterator[T_V]:
         return self.data.values()
 
+    def get(self, key: T_K, default: Optional[T_V] = None) -> Optional[T_V]:
+        # immutables.Map supports __contains__/__getitem__, but older versions
+        # may not expose `.get()`. Provide a safe fallback.
+        if key in self.data:
+            return self.data[key]
+        return default
+
+    def __contains__(self, key: T_K) -> bool:
+        return key in self.data
+
 
 ARCH_NAME_TO_AUTO_CLS = {}
 

@@ -10,7 +10,9 @@ from typing_extensions import Literal, TypeAlias
 from mergekit.common import ModelReference
 from mergekit.tokenizer.config import TokenizerConfig
 
-ScalarOrGradient: TypeAlias = Union[float, List[float]]
+# Allow string parameters (e.g., file paths) to pass validation.  This is
+# required for OTA's `preconditioner_path`, which is a string.
+ScalarOrGradient: TypeAlias = Union[float, str, List[float], List[str]]
 
 
 class ConditionalParameter(BaseModel):

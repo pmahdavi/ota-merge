@@ -1,0 +1,14 @@
+models:
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory-1/Llama-3.2-3B_Open-R1-Math_full_ebs128_lr1e-05/checkpoint-1318
+    parameters:
+      weight: 0.5
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory-1/Llama-3.2-3B_slimorca_full_ebs128_lr1e-05/checkpoint-2000
+    parameters:
+      weight: 0.5
+
+merge_method: linear
+
+# Output format settings
+dtype: bfloat16
+tokenizer_source: union  # Use tokens from both models (no explicit base model)
+chat_template: llama3  # Use Llama-3 chat template 

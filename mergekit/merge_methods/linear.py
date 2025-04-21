@@ -46,13 +46,15 @@ class LinearMergeTask(Task[torch.Tensor]):
             )
 
         tensors = torch.stack(tensors, dim=0)
-        weights = torch.tensor(weights, dtype=tensors.dtype, device=tensors.device)
-        while len(weights.shape) < len(tensors.shape):
-            weights.unsqueeze_(-1)
+        weights_tensor = torch.tensor(
+            weights, dtype=tensors.dtype, device=tensors.device
+        )
+        while len(weights_tensor.shape) < len(tensors.shape):
+            weights_tensor.unsqueeze_(-1)
 
-        res = (weights * tensors).sum(dim=0)
+        res = (weights_tensor * tensors).sum(dim=0)
         if self.normalize:
-            res = res / weights.sum(dim=0)
+            res = res / weights_tensor.sum(dim=0)
 
         return res
 
