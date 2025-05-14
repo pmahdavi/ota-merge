@@ -97,26 +97,31 @@ def generate_merge_name(config_file):
                     model_path = model_entry['model']
                     model_name = Path(model_path).name
                     
-                    # Get weight if available
+                    # Get weight if available - look in model-specific and global parameters
                     weight = None
                     if 'parameters' in model_entry and 'weight' in model_entry['parameters']:
                         weight = model_entry['parameters']['weight']
-                    
+                    elif 'parameters' in config and 'weight' in config['parameters']:
+                        # Check global params if not found in model-specific
+                        weight = config['parameters']['weight']
+
                     # For checkpoint directories, take the parent directory name
                     if model_name.startswith('checkpoint-'):
-                        model_name = Path(model_path).parent.name
-                        # Extract just the model name without parameters
-                        parts = model_name.split('_')
-                        # Use the second part of the split if available, otherwise use the first part
-                        if len(parts) > 1:
-                            model_name = parts[1]  # Changed from parts[0] to parts[1]
-                        elif len(parts) > 0:
-                            model_name = parts[0]
+                        parent_dir_name = Path(model_path).parent.name
+                        # Extract just the model name without parameters if possible
+                        parts = parent_dir_name.split('_')
+                        # Heuristic: Often the key part is after Llama-3.1-8B_tulu3_mixture_
+                        name_parts = parent_dir_name.split('mixture_') 
+                        if len(name_parts) > 1:
+                           short_name = name_parts[1].split('_full')[0] # Get text after mixture_ and before _full
+                           model_name = short_name if short_name else parent_dir_name # Use full if split fails
+                        else: 
+                           model_name = parent_dir_name # Fallback to parent dir name
                     
                     model_info.append((model_name, weight))
         
         # Get just the model names for convenience
-        model_names = [info[0] for info in model_info]
+        # model_names = [info[0] for info in model_info] # Not strictly needed now
         
         # Build the merge name
         components = []
@@ -127,35 +132,94 @@ def generate_merge_name(config_file):
         
         # Add type of merge
         components.append(merge_method)
+
+        # Add hyperparameters for specific methods
+        config_params = config.get('parameters', {})
+        if merge_method == 'dare_ties' or merge_method == 'dare_linear':
+            density = config_params.get('density')
+            if density is not None:
+                components.append(f"d{density}")
+        elif merge_method == 'breadcrumbs' or merge_method == 'breadcrumbs_ties':
+            density = config_params.get('density')
+            gamma = config_params.get('gamma')
+            if density is not None:
+                components.append(f"d{density}")
+            if gamma is not None:
+                components.append(f"g{gamma}")
+        elif merge_method == 'ties': # Add density for ties as well
+             density = config_params.get('density')
+             if density is not None:
+                components.append(f"d{density}")
+        elif merge_method == 'sce':
+             density = config_params.get('density')
+             select_topk = config_params.get('select_topk')
+             if density is not None:
+                components.append(f"d{density}")
+             if select_topk is not None:
+                components.append(f"k{select_topk}")
         
-        # Add a hash of model names if there are many
+        # Add model info
         if len(model_info) > 2:
-            # Just use the count of models
-            components.append(f"{len(model_info)}models")
+            # Just use the count of models if many and complex name already
+             if len(components) <= 2: # Add count if name isn't already long
+                components.append(f"{len(model_info)}models")
         elif len(model_info) > 0:
             # Use model names with weights, without character limits
             model_parts = []
+            has_weights = any(w is not None for _, w in model_info)
+
             for name, weight in model_info:
-                if weight is not None:
-                    # Format weight to remove trailing zeros
-                    weight_str = str(weight).rstrip('0').rstrip('.') if '.' in str(weight) else str(weight)
+                if weight is not None and has_weights: # Only add weight if specified and relevant
+                    # Format weight to remove trailing zeros if they exist after decimal
+                    weight_str = f"{weight:.2f}".rstrip('0').rstrip('.') if isinstance(weight, float) and '.' in str(weight) else str(weight)
                     # Use full model name without character limit
                     model_part = f"{name}w{weight_str}"
                 else:
                     # Use full model name without character limit
                     model_part = name
-                model_parts.append(model_part)
+                # Shorten model names for the directory name if too long? - Keep full for now
+                model_parts.append(model_part) 
             
             model_str = "-".join(model_parts)
-            components.append(model_str)
-        
+            # Only add model string if it doesn't make the name excessively long
+            if len(model_str) < 80 : # Arbitrary limit to avoid overly long dir names
+               components.append(model_str)
+            else:
+               components.append(f"{len(model_info)}models")
+
+
         # Create the final merge name
         merge_name = "_".join(components)
+        # Sanitize name (replace problematic characters if any - though unlikely with current components)
+        merge_name = merge_name.replace('/', '-').replace(' ', '_') 
+        
+        # Limit overall length?
+        max_len = 150 # Max reasonable length for directory name
+        if len(merge_name) > max_len:
+             # If too long, fallback to a simpler name structure
+             simplified_components = []
+             if base_model: simplified_components.append(base_model)
+             simplified_components.append(merge_method)
+             # Add key hyperparameters back
+             if merge_method in ['dare_ties', 'dare_linear', 'ties', 'sce', 'breadcrumbs', 'breadcrumbs_ties']:
+                 density = config_params.get('density')
+                 if density is not None: simplified_components.append(f"d{density}")
+             if merge_method in ['breadcrumbs', 'breadcrumbs_ties']:
+                 gamma = config_params.get('gamma')
+                 if gamma is not None: simplified_components.append(f"g{gamma}")
+             if merge_method == 'sce':
+                 select_topk = config_params.get('select_topk')
+                 if select_topk is not None: simplified_components.append(f"k{select_topk}")
+
+             simplified_components.append(f"{len(model_info)}models")
+             merge_name = "_".join(simplified_components)
+
+
         return merge_name
     
     except Exception as e:
-        print(f"Warning: Could not parse config file: {e}", file=sys.stderr)
-        return f'mergekit_{Path(config_file).stem}'
+        print(f"Warning: Could not parse config file or generate name: {e}", file=sys.stderr)
+        return f'mergekit_fallback_{Path(config_file).stem}'
 
 def generate_job_id():
     """Generate a unique job ID for the PBS script file name."""

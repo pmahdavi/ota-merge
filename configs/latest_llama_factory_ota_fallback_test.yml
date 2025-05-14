@@ -1,0 +1,27 @@
+merge_method: ota
+base_model: meta-llama/Meta-Llama-3.1-8B
+parameters:
+  epsilon: 1e-10 # Default epsilon for OTA, can be tuned
+  # Global weight is not used by OTA, but kept here for reference
+  # weight: 0.25    
+
+models:
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_general_full_ebs128_lr5e-06/checkpoint-912
+    parameters:
+      weight: 1.0 # Fallback weight
+      # preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_general_full_ebs128_lr5e-06/export_full_state_checkpoint-912/optimizer_full.pt # Removed for fallback test
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_knowledge_recall_full_ebs128_lr5e-06/checkpoint-820
+    parameters:
+      weight: 1.0 # Fallback weight
+      # preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_knowledge_recall_full_ebs128_lr5e-06/export_full_state_checkpoint-820/optimizer_full.pt # Removed for fallback test
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+    parameters:
+      weight: 1.0 # Fallback weight
+      # preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/export_full_state_checkpoint-2611/optimizer_full.pt # Removed for fallback test
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_precise_if_full_ebs128_lr1e-05/checkpoint-234
+    parameters:
+      weight: 1.0 # Fallback weight
+      # preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_precise_if_full_ebs128_lr1e-05/export_full_state_checkpoint-234/optimizer_full.pt # Removed for fallback test
+
+dtype: bfloat16
+tokenizer_source: union 

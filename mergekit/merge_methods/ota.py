@@ -80,6 +80,7 @@ from mergekit.merge_methods.base import (
     MergeTensorInput,
 )
 from mergekit.merge_methods.rectify_embed import rectify_embed_sizes
+from mergekit.options import MergeOptions
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,8 @@ class OTAMergeTask(Task[torch.Tensor]):
     tensor_parameters: ImmutableMap[ModelReference, ImmutableMap[str, Any]]
     epsilon: float
     weight_info: WeightInfo
+    merge_options: Optional[MergeOptions] = None
+    out_path_for_detailed_logs: Optional[str] = None
 
     # ---------------- Task boiler‑plate ----------------
 
@@ -180,11 +183,28 @@ class OTAMergeTask(Task[torch.Tensor]):
 
         Returns None if unavailable.
         """
-
+        logger.debug(
+            "OTA Task (%s): Attempting to load preconditioner for model %s, tensor %s",
+            self.weight_info.name,
+            model,
+            self.weight_info.name,
+        )
         params = self.tensor_parameters[model]
         path = params.get("preconditioner_path")
         if not path:
+            logger.debug(
+                "OTA Task (%s): No preconditioner_path specified for model %s.",
+                self.weight_info.name,
+                model,
+            )
             return None
+
+        logger.debug(
+            "OTA Task (%s): Preconditioner path for model %s is %s.",
+            self.weight_info.name,
+            model,
+            path,
+        )
 
         # Decide loader based on file extension.  Safetensors for *.safetensors,
         # otherwise treat as a torch optimizer checkpoint (*.pt / *.pth / *.bin).
@@ -194,12 +214,15 @@ class OTAMergeTask(Task[torch.Tensor]):
             if is_safetensors:
                 st = _open_safetensors(path)
                 available_keys = st.keys()
+                logger.debug("OTA Task (%s): Successfully opened safetensor: %s", self.weight_info.name, path)
             else:
                 st = _open_torch_opt_state(path)
                 available_keys = st.keys()
+                logger.debug("OTA Task (%s): Successfully loaded torch optimizer state: %s", self.weight_info.name, path)
         except Exception as e:
             logger.warning(
-                "OTA: failed to open pre‑conditioner file '%s' for model %s: %s",
+                "OTA Task (%s): Failed to open/load preconditioner file '%s' for model %s. Error: %s",
+                self.weight_info.name,
                 path,
                 model,
                 e,
@@ -218,11 +241,21 @@ class OTAMergeTask(Task[torch.Tensor]):
             key = next((k for k in fallback_keys if k in available_keys), None)
             if key is None:
                 logger.warning(
-                    "OTA: tensor '%s' not present in pre‑conditioner file '%s'",
+                    "OTA Task (%s): Tensor name '%s' (or fallbacks) not present in preconditioner file '%s'. Available keys: %s",
+                    self.weight_info.name,
+                    self.weight_info.name,
+                    path,
+                    list(available_keys)
+                )
+                return None
+            else:
+                logger.debug(
+                    "OTA Task (%s): Found key '%s' for tensor '%s' in preconditioner file '%s'",
+                    self.weight_info.name,
+                    key,
                     self.weight_info.name,
                     path,
                 )
-                return None
 
         try:
             pc = (
@@ -230,19 +263,31 @@ class OTAMergeTask(Task[torch.Tensor]):
             )
         except Exception as e:
             logger.warning(
-                "OTA: unable to read tensor '%s' from '%s': %s", key, path, e
+                "OTA Task (%s): Unable to read tensor '%s' from '%s': %s", self.weight_info.name, key, path, e
             )
             return None
 
         # Ensure dtype and device alignment later; keep on CPU for now
         if pc.shape != tensor.shape:
             logger.warning(
-                "OTA: pre‑conditioner shape mismatch for %s (got %s, expected %s)",
+                "OTA Task (%s): Preconditioner shape mismatch for %s (model %s). Got %s, expected %s. File: %s",
                 self.weight_info.name,
+                self.weight_info.name,
+                model,
                 pc.shape,
                 tensor.shape,
+                path,
             )
             return None
+        logger.debug(
+            "OTA Task (%s): Successfully loaded preconditioner tensor '%s' for model %s from %s with shape %s, dtype %s.",
+            self.weight_info.name,
+            key,
+            model,
+            path,
+            pc.shape,
+            pc.dtype,
+        )
         return pc
 
     # ---------------------------------------------------
@@ -250,6 +295,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     def execute(
         self, tensors: Dict[ModelReference, torch.Tensor], **_kwargs
     ) -> torch.Tensor:
+        logger.info("OTA Task: Processing tensor '%s'", self.weight_info.name)
         models = list(tensors.keys())
         tensor_list = [tensors[m] for m in models]
 
@@ -270,6 +316,13 @@ class OTAMergeTask(Task[torch.Tensor]):
         # Move to appropriate device/dtype once to avoid repeated transfers.
         device = stacked.device
         dtype = stacked.dtype
+        logger.debug(
+            "OTA Task (%s): Stacked model tensors on device '%s' with dtype '%s'. Shape: %s",
+            self.weight_info.name,
+            device,
+            dtype,
+            stacked.shape,
+        )
 
         # Build per‑model, per‑element weighting tensors.
         weight_tensors = []
@@ -277,20 +330,63 @@ class OTAMergeTask(Task[torch.Tensor]):
             # Try to load diagonal pre‑conditioner.
             pc = self._load_preconditioner(m, stacked[i])
             if pc is not None:
+                original_pc_dtype = pc.dtype
+                logger.debug(
+                    "OTA Task (%s): Model %s - Preconditioner tensor loaded. Original dtype: %s. Target dtype: %s",
+                    self.weight_info.name,
+                    m,
+                    original_pc_dtype,
+                    dtype,
+                )
+                pc_stats_raw = pc.float() # Calculate stats in float32 for stability if original is low precision
+                logger.debug(
+                    "OTA Task (%s): Model %s - Raw PC stats (float32): Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                    self.weight_info.name, m, pc_stats_raw.min(), pc_stats_raw.max(), pc_stats_raw.mean(), pc_stats_raw.std()
+                )
+
                 pc = pc.to(device=device, dtype=dtype)
+                logger.debug(
+                    "OTA Task (%s): Model %s - PC tensor converted to device '%s', dtype '%s'. Shape: %s",
+                    self.weight_info.name, m, pc.device, pc.dtype, pc.shape
+                )
+                
                 # Adam curvature proxy
-                precond = torch.sqrt(pc + self.epsilon)
+                precond = torch.sqrt(pc)
+                precond_stats = precond.float()
+                logger.debug(
+                    "OTA Task (%s): Model %s - Sqrt(PC) (precond) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                    self.weight_info.name, m, precond_stats.min(), precond_stats.max(), precond_stats.mean(), precond_stats.std()
+                )
+
                 weight_tensor = precond + self.epsilon  # (P_i + ε)
+                weight_tensor_stats = weight_tensor.float()
+                logger.debug(
+                    "OTA Task (%s): Model %s - Final weight_tensor (precond + eps) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                    self.weight_info.name, m, weight_tensor_stats.min(), weight_tensor_stats.max(), weight_tensor_stats.mean(), weight_tensor_stats.std()
+                )
             else:
                 # If a preconditioner path was provided but loading failed, emit a
                 # reminder that we are falling back to the scalar weight.
                 if self.tensor_parameters[m].get("preconditioner_path"):
                     logger.warning(
-                        "OTA: falling back to scalar weight for %s because pre‑conditioner could not be loaded",
+                        "OTA Task (%s): Model %s - Falling back to scalar weight because preconditioner could not be loaded (see previous warnings).",
+                        self.weight_info.name,
+                        m,
+                    )
+                else:
+                    logger.info(
+                        "OTA Task (%s): Model %s - No preconditioner_path, using scalar weight.",
+                        self.weight_info.name,
                         m,
                     )
                 # Fallback: scalar weight.
                 scalar_w = self.tensor_parameters[m].get("weight", 1.0)
+                logger.info(
+                    "OTA Task (%s): Model %s - Using scalar weight: %s",
+                    self.weight_info.name,
+                    m,
+                    scalar_w,
+                )
                 wt = torch.tensor(scalar_w, dtype=dtype, device=device)
                 # broadcast to full shape
                 while wt.dim() < stacked[i].dim():
@@ -300,12 +396,87 @@ class OTAMergeTask(Task[torch.Tensor]):
             weight_tensors.append(weight_tensor)
 
         weights_stack = torch.stack(weight_tensors, dim=0)
+        logger.debug("OTA Task (%s): weights_stack shape: %s", self.weight_info.name, weights_stack.shape)
+
+        # Calculate element-wise std dev of weights across models
+        if weights_stack.shape[0] > 1: 
+            elementwise_std_of_weights = torch.std(weights_stack, dim=0, unbiased=True)
+            elementwise_std_stats = elementwise_std_of_weights.float()
+            logger.info(
+                "OTA Task (%s): Element-wise StdDev of final weights across models: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                self.weight_info.name, 
+                elementwise_std_stats.min(), 
+                elementwise_std_stats.max(), 
+                elementwise_std_stats.mean(), 
+                elementwise_std_stats.std()
+            )
+
+            # --- New section for saving detailed tensor data ---
+            TENSORS_FOR_DETAILED_ANALYSIS = [
+                # --- High Mean Element-wise StdDev (High Average Disagreement) ---
+                "model.layers.0.post_attention_layernorm.weight", 
+                "model.layers.0.input_layernorm.weight",          
+                "model.layers.1.post_attention_layernorm.weight", 
+                "model.layers.31.post_attention_layernorm.weight",
+                "model.layers.0.self_attn.v_proj.weight",         
+
+                # --- Low Mean Element-wise StdDev (High Average Agreement) ---
+                "model.layers.0.self_attn.q_proj.weight",         
+                "model.layers.0.self_attn.k_proj.weight",         
+                "model.layers.23.self_attn.q_proj.weight",        
+
+                # --- High Max Element-wise StdDev (High Peak Disagreement) ---
+                # model.layers.0.self_attn.v_proj.weight is already included above
+                "lm_head.weight",                                 
+                "model.embed_tokens.weight",                      
+                "model.layers.2.self_attn.v_proj.weight",         
+                "model.layers.1.mlp.down_proj.weight",            
+
+                # --- Other Representative Types ---
+                "model.layers.0.mlp.gate_proj.weight",            
+                "model.norm.weight"                               
+            ]
+            
+            detailed_log_base_dir = "." # Default to current directory
+            if self.out_path_for_detailed_logs:
+                detailed_log_base_dir = self.out_path_for_detailed_logs
+
+            DETAILED_LOG_OUTPUT_DIR = os.path.join(detailed_log_base_dir, "ota_detailed_tensor_logs")
+
+            if self.weight_info.name in TENSORS_FOR_DETAILED_ANALYSIS:
+                try:
+                    if not os.path.exists(DETAILED_LOG_OUTPUT_DIR):
+                        os.makedirs(DETAILED_LOG_OUTPUT_DIR, exist_ok=True)
+                    
+                    sanitized_tensor_name = self.weight_info.name.replace("/", "_").replace(".", "-")
+                    
+                    weights_stack_path = os.path.join(DETAILED_LOG_OUTPUT_DIR, f"{sanitized_tensor_name}_weights_stack.pt")
+                    torch.save(weights_stack.cpu(), weights_stack_path)
+                    logger.info("OTA Task (%s): Saved detailed weights_stack to %s", self.weight_info.name, weights_stack_path)
+                    
+                    ew_std_path = os.path.join(DETAILED_LOG_OUTPUT_DIR, f"{sanitized_tensor_name}_elementwise_std.pt")
+                    torch.save(elementwise_std_of_weights.cpu(), ew_std_path)
+                    logger.info("OTA Task (%s): Saved detailed elementwise_std_of_weights to %s", self.weight_info.name, ew_std_path)
+
+                except Exception as e:
+                    logger.error("OTA Task (%s): Failed to save detailed tensor data for %s. Error: %s", self.weight_info.name, self.weight_info.name, e)
+            # --- End of new section ---
+        else:
+            logger.info(
+                "OTA Task (%s): Only one model contributing or fallback for all, skipping element-wise StdDev of weights across models.",
+                self.weight_info.name
+            )
 
         # Compute OTA merge: element‑wise weighted average.
         numerator = (weights_stack * stacked).sum(dim=0)
         # Denominator already contains  Σ (P_i + ε)  ⇒  Σ P_i + n·ε
         denominator = weights_stack.sum(dim=0)
         merged = numerator / denominator
+        merged_stats = merged.float()
+        logger.info(
+            "OTA Task (%s): Final merged tensor stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+            self.weight_info.name, merged_stats.min(), merged_stats.max(), merged_stats.mean(), merged_stats.std()
+        )
         return merged
 
     # ---------------------------------------------------
@@ -357,11 +528,21 @@ class OTAMerge(MergeMethod):
         tensors: MergeTensorInput,
         parameters: ImmutableMap[str, Any],
         tensor_parameters: ImmutableMap[ModelReference, ImmutableMap[str, Any]],
-        **_kwargs,
+        base_model: Optional[ModelReference],
+        merge_options: Optional[MergeOptions] = None,
+        out_path_for_debug: Optional[str] = None
     ) -> Task:
-        return OTAMergeTask(
+        if out_path_for_debug:
+            logger.debug("OTAMerge.make_task: out_path_for_debug is set to: %s", out_path_for_debug)
+        else:
+            logger.debug("OTAMerge.make_task: out_path_for_debug was not provided.")
+
+        task = OTAMergeTask(
             gather_tensors=tensors,
             tensor_parameters=tensor_parameters,
             epsilon=parameters.get("epsilon", 1e-8),
             weight_info=output_weight,
-        ) 
+            merge_options=merge_options,
+            out_path_for_detailed_logs=out_path_for_debug
+        )
+        return task 

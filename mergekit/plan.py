@@ -161,6 +161,7 @@ class MergePlanner:
         weights_in: List[WeightInfo],
         models: List[ModelReference],
         cfg_reader: ConfigReader,
+        out_path_for_debug: Optional[str] = None,
     ):
         if weight.optional:
             # check if any input weights are present
@@ -193,13 +194,15 @@ class MergePlanner:
             is_base = model == base_model
             tensor_params[model] = {}
             cfg_m = cfg_reader.for_tensor(weight_in.name)
+            tensor_params_data_for_model = {}
             for p in tensor_merge_method.tensor_parameters():
-                tensor_params[model][p.name] = cfg_m.parameter(
+                tensor_params_data_for_model[p.name] = cfg_m.parameter(
                     p.name,
                     model=model,
                     required=p.required and not is_base,
                     default=p.default_value,
                 )
+            tensor_params[model] = ImmutableMap(tensor_params_data_for_model)
 
         gather_tensors = GatherTensors(
             weight_info=ImmutableMap(data=dict(zip(models, weights_in))),
@@ -222,18 +225,16 @@ class MergePlanner:
                 base_model=base_model,
             )
 
-        tensor_task = tensor_merge_method.make_task(
+        tensor_merge_task = tensor_merge_method.make_task(
             output_weight=weight,
             tensors=tensor_input_task,
-            parameters=ImmutableMap(data=global_params),
-            tensor_parameters=ImmutableMap(
-                data={
-                    key: ImmutableMap(data=tensor_params[key]) for key in tensor_params
-                }
-            ),
+            parameters=ImmutableMap(global_params),
+            tensor_parameters=ImmutableMap(tensor_params),
             base_model=base_model,
+            merge_options=self.options,
+            out_path_for_debug=out_path_for_debug
         )
-        self._tensors.append((weight, tensor_task))
+        self._tensors.append((weight, tensor_merge_task))
 
     def plan_layer(
         self,
@@ -242,6 +243,7 @@ class MergePlanner:
         t: float,
         cfg_reader: ConfigReader,
         module_name: str,
+        out_path_for_debug: Optional[str] = None,
     ):
         module_arch = self._out_module_arch(module_name)
         weights_out: List[WeightInfo] = module_arch.layer_weights(
@@ -260,6 +262,7 @@ class MergePlanner:
                 weights_in=[weights_in[j][idx] for j in range(len(weights_in))],
                 models=[s.model for s in sources],
                 cfg_reader=cfg_reader.with_t(t),
+                out_path_for_debug=out_path_for_debug
             )
 
         self._current_module_layers += 1
@@ -269,6 +272,7 @@ class MergePlanner:
         definition: OutputSliceDefinition,
         module_def: OutputModuleDefinition,
         module_name: str,
+        out_path_for_debug: Optional[str] = None,
     ):
         slice_lengths = [
             s.layer_range[1] - s.layer_range[0] for s in definition.sources
@@ -295,9 +299,10 @@ class MergePlanner:
                 t=t,
                 cfg_reader=cfg_reader,
                 module_name=module_name,
+                out_path_for_debug=out_path_for_debug
             )
 
-    def plan_module(self, module_name: str, definition: OutputModuleDefinition):
+    def plan_module(self, module_name: str, definition: OutputModuleDefinition, out_path_for_debug: Optional[str] = None):
         self._current_module_layers = 0
 
         module_arch = self._out_module_arch(module_name)
@@ -311,6 +316,7 @@ class MergePlanner:
                 config_reader.for_tensor(tensor_name=weight_info.name).for_out_slice(
                     definition.slices[0]
                 ),
+                out_path_for_debug=out_path_for_debug
             )
 
         for out_slice in definition.slices:
@@ -318,6 +324,7 @@ class MergePlanner:
                 out_slice,
                 module_def=definition,
                 module_name=module_name,
+                out_path_for_debug=out_path_for_debug
             )
 
         for weight_info in module_arch.post_weights():
@@ -328,11 +335,12 @@ class MergePlanner:
                 config_reader.for_tensor(tensor_name=weight_info.name).for_out_slice(
                     definition.slices[-1]
                 ),
+                out_path_for_debug=out_path_for_debug
             )
 
     def plan_to_disk(self, out_path: str) -> List[Task]:
         """Plan the merge to be streamed to disk, returning a list of tasks."""
-        self._plan()
+        self._plan(out_path_for_debug=out_path)
 
         writer_task = TensorWriterTask(
             out_path=out_path,
@@ -372,9 +380,12 @@ class MergePlanner:
             for w, t in self._tensors
         ]
 
-    def _plan(self):
+    def _plan(self, out_path_for_debug: Optional[str] = None):
         self.normalize_config()
-        self._tasks = []
+        self._tensors = []
 
         for module_name in self.config.modules:
-            self.plan_module(module_name, self.config.modules[module_name])
+            self.plan_module(module_name, self.config.modules[module_name], out_path_for_debug=out_path_for_debug)
+        if self.config.slices:
+            for slice_def in self.config.slices:
+                self.plan_slice(slice_def, module_def=None, module_name=None, out_path_for_debug=out_path_for_debug)

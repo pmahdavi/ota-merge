@@ -4,6 +4,13 @@
 
 import click
 import yaml
+import logging
+
+# Added logging configuration
+# logging.basicConfig(level=logging.INFO) # Set a default level for other loggers
+# logging.getLogger("mergekit.merge_methods.ota").setLevel(logging.DEBUG)
+# You could also set the root mergekit logger to DEBUG if you want more general debug info:
+# logging.getLogger("mergekit").setLevel(logging.DEBUG)
 
 from mergekit.config import MergeConfiguration
 from mergekit.merge import run_merge

@@ -1,0 +1,36 @@
+#!/bin/tcsh
+#PBS -l ncpus=16
+#PBS -l ngpus=1 
+#PBS -l mem=60gb
+#PBS -l walltime=01:30:00
+# Use a general queue or adjust if needed; taken from example, but ngpus=0 might prefer a cpu queue
+#PBS -q workq@e5-cse-cbgpu01.eecscl.psu.edu 
+#PBS -N ota_viz
+#PBS -M pxm5426@psu.edu 
+#PBS -m bea
+#PBS -o pbs_results/
+#PBS -e pbs_results/
+
+# Change to the directory where the job was submitted from
+cd $PBS_O_WORKDIR
+
+# Source shell configuration (as in example)
+if ( -f ~/.tcshrc ) then
+    source ~/.tcshrc
+endif
+
+# Activate conda environment (using the one from the example)
+# ** IMPORTANT: If visualize_ota_stddev.py needs a different environment, **
+# ** please change 'llama-factory-env' to the correct one. **
+conda activate mergekit
+
+echo "Current directory: `pwd`"
+echo "Python version: `python --version`"
+echo "PyTorch version: `python -c 'import torch; print(torch.__version__)'`"
+echo "Device PyTorch will use: `python -c 'import torch; print(torch.device("cuda" if torch.cuda.is_available() else "cpu"))'`"
+
+# Command to execute the visualization script
+echo "Running OTA visualization script..."
+python visualize_ota_stddev.py /scratch/pxm5426/runs/lora-exploration/merged_models/ota_4models/ota_detailed_tensor_logs
+
+echo "Job finished." 

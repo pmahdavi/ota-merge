@@ -33,21 +33,24 @@ def run_merge(
     options: MergeOptions,
     config_source: Optional[str] = None,
 ):
-    if options.random_seed is not None:
-        transformers.trainer_utils.set_seed(options.random_seed)
+    # Use the original options object directly
+    current_options = options
+
+    if current_options.random_seed is not None:
+        transformers.trainer_utils.set_seed(current_options.random_seed)
 
     if not merge_config.models and not merge_config.slices and not merge_config.modules:
         raise RuntimeError("No output requested")
 
-    arch_info = get_architecture_info(merge_config, options)
+    arch_info = get_architecture_info(merge_config, current_options)
 
     # initialize loader cache and set options
     loader_cache = LoaderCache()
-    loader_cache.setup(options=options)
+    loader_cache.setup(options=current_options)
 
     # create config for output model
     cfg_out = _model_out_config(
-        merge_config, arch_info, trust_remote_code=options.trust_remote_code
+        merge_config, arch_info, trust_remote_code=current_options.trust_remote_code
     )
 
     # warm up loader cache
@@ -55,7 +58,7 @@ def run_merge(
         pbar := tqdm.tqdm(
             merge_config.referenced_models(),
             desc="Warmup loader cache",
-            disable=options.quiet,
+            disable=current_options.quiet,
         )
     ):
         loader_cache.get(model)
@@ -65,24 +68,24 @@ def run_merge(
     targets = MergePlanner(
         merge_config,
         arch_info,
-        options=options,
+        options=current_options,
         out_model_config=cfg_out,
     ).plan_to_disk(out_path=out_path)
 
-    if options.multi_gpu:
+    if current_options.multi_gpu:
         exec = MultiGPUExecutor(
             tasks=targets,
-            storage_device=None if options.low_cpu_memory else "cpu",
+            storage_device=None if current_options.low_cpu_memory else "cpu",
         )
     else:
         exec = Executor(
             tasks=targets,
-            math_device="cuda" if options.cuda else "cpu",
-            storage_device="cuda" if options.low_cpu_memory else "cpu",
+            math_device="cuda" if current_options.cuda else "cpu",
+            storage_device="cuda" if current_options.low_cpu_memory else "cpu",
         )
 
     tokenizer = None
-    for _task, value in exec.run(quiet=options.quiet):
+    for _task, value in exec.run(quiet=current_options.quiet):
         if isinstance(value, TokenizerInfo):
             tokenizer = value.tokenizer
 
@@ -97,7 +100,7 @@ def run_merge(
     logger.info("Saving config")
     cfg_out.save_pretrained(out_path)
 
-    if options.write_model_card:
+    if current_options.write_model_card:
         if not config_source:
             config_source = merge_config.to_yaml()
 
@@ -116,13 +119,13 @@ def run_merge(
 
     if tokenizer is not None:
         logger.info("Saving tokenizer")
-        _set_chat_template(tokenizer, merge_config)
+        _set_chat_template(tokenizer, merge_config, trust_remote_code=current_options.trust_remote_code)
         tokenizer.save_pretrained(out_path, safe_serialization=True)
     else:
-        if options.copy_tokenizer:
+        if current_options.copy_tokenizer:
             try:
                 _copy_tokenizer(
-                    merge_config, out_path, trust_remote_code=options.trust_remote_code
+                    merge_config, out_path, trust_remote_code=current_options.trust_remote_code
                 )
             except Exception as e:
                 logger.error(

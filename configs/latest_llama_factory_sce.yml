@@ -1,0 +1,26 @@
+merge_method: sce
+base_model: meta-llama/Meta-Llama-3.1-8B
+parameters:
+  density: 0.9      # Default density for sign consensus step
+  select_topk: 0.2  # Default fraction of high-variance elements to select
+  weight: 1.0       # Equal weighting for all models before SCE processing
+
+models:
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/checkpoint-1111
+    parameters:
+      weight: 1.0
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_general_full_ebs128_lr5e-06/checkpoint-912
+    parameters:
+      weight: 1.0
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_knowledge_recall_full_ebs128_lr5e-06/checkpoint-820
+    parameters:
+      weight: 1.0
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+    parameters:
+      weight: 1.0
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_precise_if_full_ebs128_lr1e-05/checkpoint-234
+    parameters:
+      weight: 1.0
+
+dtype: bfloat16
+tokenizer_source: union 
