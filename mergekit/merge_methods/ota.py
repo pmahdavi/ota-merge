@@ -36,6 +36,8 @@ The method exposes two user‑facing parameter spaces:
 Global parameters (specified once for the whole merge):
     • epsilon – numerical stability constant added to denominator (default
       1e‑8).
+    • normalise – how to normalize preconditioner tensors (sqrt(pc)) before use:
+      "none" (default), "global", "layer", or "inv".
 
 Per‑model tensor parameters:
     • weight – scalar weight (as in LinearMerge, default 1.0)
@@ -163,6 +165,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     gather_tensors: MergeTensorInput
     tensor_parameters: ImmutableMap[ModelReference, ImmutableMap[str, Any]]
     epsilon: float
+    normalise_mode: str
     weight_info: WeightInfo
     merge_options: Optional[MergeOptions] = None
     out_path_for_detailed_logs: Optional[str] = None
@@ -327,25 +330,13 @@ class OTAMergeTask(Task[torch.Tensor]):
 
         # Build per‑model, per‑element weighting tensors.
         weight_tensors = []
-        # Retrieve normalization mode from global merge parameters if available
-        norm_mode = "none" # Default value
-        if self.merge_options and self.merge_options.method_parameters:
-            norm_mode = self.merge_options.method_parameters.get("normalise", "none")
-            logger.info(
-                "OTA Task (%s): Normalisation mode set to '%s'.",
-                self.weight_info.name,
-                norm_mode
-            )
-        elif self.merge_options and not self.merge_options.method_parameters:
-             logger.info(
-                "OTA Task (%s): No method_parameters found in merge_options. Using default normalisation mode 'none'.",
-                self.weight_info.name
-            )
-        else: # self.merge_options is None
-            logger.info(
-                "OTA Task (%s): No merge_options provided. Using default normalisation mode 'none'.",
-                self.weight_info.name
-            )
+        
+        norm_mode = self.normalise_mode
+        logger.info(
+            "OTA Task (%s): Normalisation mode set to '%s'.",
+            self.weight_info.name,
+            norm_mode
+        )
 
         for i, m in enumerate(models):
             # Try to load diagonal pre‑conditioner.
@@ -382,27 +373,28 @@ class OTAMergeTask(Task[torch.Tensor]):
                 # ---- Normalisation ablation ----
                 scale_val: Optional[torch.Tensor] = None # For logging
                 if norm_mode == "global":
-                    scale = precond.mean()
+                    scale = precond.float().mean().to(precond.dtype)
                     precond = precond / (scale + self.epsilon)
                     scale_val = scale
                 elif norm_mode == "layer":
                     dims = list(range(1, precond.dim()))  # keep param axis (dim 0 is model index)
                     if not dims: # scalar tensor, treat as global
-                        scale = precond.mean()
+                        scale = precond.float().mean().to(precond.dtype)
                     else:
-                        scale = precond.mean(dim=dims, keepdim=True)
+                        scale = precond.float().mean(dim=dims, keepdim=True).to(precond.dtype)
                     precond = precond / (scale + self.epsilon)
                     scale_val = scale
                 elif norm_mode == "inv":
-                    precond = 1.0 / (precond + self.epsilon)
+                    # For "inv" mode, precond (sqrt(pc)) is not scaled here.
+                    # The inversion is applied when calculating weight_tensor.
+                    pass
                 elif norm_mode != "none":
                     raise ValueError(f"Unknown normalisation mode for OTA: {norm_mode}")
                 # ---------------------------------
-
-                weight_tensor = precond + self.epsilon  # (P_i + ε)
                 
-                # Log post-normalisation statistics
-                post_norm_stats = precond.float() # use precond as weight_tensor has epsilon added
+                # Log post-normalisation statistics for 'precond'
+                # For 'inv' and 'none', this logs stats of original sqrt(pc) or scaled if 'global'/'layer'.
+                post_norm_stats = precond.float() 
                 log_scale_val = "N/A"
                 if scale_val is not None:
                     if scale_val.numel() == 1:
@@ -415,7 +407,15 @@ class OTAMergeTask(Task[torch.Tensor]):
                     self.weight_info.name, m, norm_mode, log_scale_val,
                     post_norm_stats.min(), post_norm_stats.max(), post_norm_stats.mean(), post_norm_stats.std()
                 )
-                
+
+                if norm_mode == "inv":
+                    # precond is sqrt(pc)
+                    weight_tensor = 1.0 / (precond + self.epsilon)
+                else:
+                    # For "none", precond is sqrt(pc)
+                    # For "global"/"layer", precond is scaled sqrt(pc)
+                    weight_tensor = precond + self.epsilon
+                                
                 weight_tensor_stats = weight_tensor.float()
                 logger.debug(
                     "OTA Task (%s): Model %s - Final weight_tensor (precond + eps) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
@@ -601,6 +601,7 @@ class OTAMerge(MergeMethod):
             gather_tensors=tensors,
             tensor_parameters=tensor_parameters,
             epsilon=parameters.get("epsilon", 1e-8),
+            normalise_mode=str(parameters.get("normalise", "none")).lower(),
             weight_info=output_weight,
             merge_options=merge_options,
             out_path_for_detailed_logs=out_path_for_debug
