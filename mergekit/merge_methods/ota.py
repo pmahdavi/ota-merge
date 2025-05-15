@@ -58,6 +58,7 @@ models:
 # (global) parameters for the merge
 parameters:
   epsilon: 1e-8
+  normalise: global        # none | global | layer | inv
 ```
 """
 
@@ -326,6 +327,26 @@ class OTAMergeTask(Task[torch.Tensor]):
 
         # Build per‑model, per‑element weighting tensors.
         weight_tensors = []
+        # Retrieve normalization mode from global merge parameters if available
+        norm_mode = "none" # Default value
+        if self.merge_options and self.merge_options.method_parameters:
+            norm_mode = self.merge_options.method_parameters.get("normalise", "none")
+            logger.info(
+                "OTA Task (%s): Normalisation mode set to '%s'.",
+                self.weight_info.name,
+                norm_mode
+            )
+        elif self.merge_options and not self.merge_options.method_parameters:
+             logger.info(
+                "OTA Task (%s): No method_parameters found in merge_options. Using default normalisation mode 'none'.",
+                self.weight_info.name
+            )
+        else: # self.merge_options is None
+            logger.info(
+                "OTA Task (%s): No merge_options provided. Using default normalisation mode 'none'.",
+                self.weight_info.name
+            )
+
         for i, m in enumerate(models):
             # Try to load diagonal pre‑conditioner.
             pc = self._load_preconditioner(m, stacked[i])
@@ -358,7 +379,43 @@ class OTAMergeTask(Task[torch.Tensor]):
                     self.weight_info.name, m, precond_stats.min(), precond_stats.max(), precond_stats.mean(), precond_stats.std()
                 )
 
+                # ---- Normalisation ablation ----
+                scale_val: Optional[torch.Tensor] = None # For logging
+                if norm_mode == "global":
+                    scale = precond.mean()
+                    precond = precond / (scale + self.epsilon)
+                    scale_val = scale
+                elif norm_mode == "layer":
+                    dims = list(range(1, precond.dim()))  # keep param axis (dim 0 is model index)
+                    if not dims: # scalar tensor, treat as global
+                        scale = precond.mean()
+                    else:
+                        scale = precond.mean(dim=dims, keepdim=True)
+                    precond = precond / (scale + self.epsilon)
+                    scale_val = scale
+                elif norm_mode == "inv":
+                    precond = 1.0 / (precond + self.epsilon)
+                elif norm_mode != "none":
+                    raise ValueError(f"Unknown normalisation mode for OTA: {norm_mode}")
+                # ---------------------------------
+
                 weight_tensor = precond + self.epsilon  # (P_i + ε)
+                
+                # Log post-normalisation statistics
+                post_norm_stats = precond.float() # use precond as weight_tensor has epsilon added
+                log_scale_val = "N/A"
+                if scale_val is not None:
+                    if scale_val.numel() == 1:
+                        log_scale_val = f"{scale_val.item():.4e}"
+                    else: # layer norm, scale is a tensor
+                        log_scale_val = f"tensor(Min={scale_val.min().item():.4e}, Max={scale_val.max().item():.4e}, Mean={scale_val.mean().item():.4e})"
+                
+                logger.debug(
+                    "OTA Task (%s): Model %s - Post-normalisation (mode: %s, scale: %s) precond stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                    self.weight_info.name, m, norm_mode, log_scale_val,
+                    post_norm_stats.min(), post_norm_stats.max(), post_norm_stats.mean(), post_norm_stats.std()
+                )
+                
                 weight_tensor_stats = weight_tensor.float()
                 logger.debug(
                     "OTA Task (%s): Model %s - Final weight_tensor (precond + eps) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
@@ -510,7 +567,10 @@ class OTAMerge(MergeMethod):
     # ---- Parameter schemas ----
 
     def parameters(self) -> List[ConfigParameterDef]:
-        return [ConfigParameterDef(name="epsilon", required=False, default_value=1e-8)]
+        return [
+            ConfigParameterDef(name="epsilon", required=False, default_value=1e-8),
+            ConfigParameterDef(name="normalise", required=False, default_value="none", description="How to normalize preconditioner tensors before use: 'none', 'global', 'layer', 'inv'")
+        ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
         # `weight` is optional (defaults to 1.0).  `preconditioner_path` is optional.
