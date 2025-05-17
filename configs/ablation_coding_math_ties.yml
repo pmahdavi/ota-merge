@@ -1,0 +1,14 @@
+base_model: meta-llama/Meta-Llama-3.1-8B
+models:
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/checkpoint-1111
+    parameters:
+      weight: 0.5 # Weight for the (Code - Base) task vector. TIES density controls overall scaling.
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+    parameters:
+      weight: 0.5 # Weight for the (Math - Base) task vector. TIES density controls overall scaling.
+merge_method: ties
+parameters:
+  density: 0.9 # From latest_llama_factory_ties.yml, can be tuned
+  # majority_sign_threshold: 0.0 # Default, can be tuned. Not present in reference, so using default.
+dtype: bfloat16
+tokenizer_source: union # Added from reference configs 

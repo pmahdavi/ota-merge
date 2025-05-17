@@ -1,7 +1,7 @@
-merge_method: dare_ties
+merge_method: dare_linear
 base_model: meta-llama/Meta-Llama-3.1-8B
 parameters:
-  density: 0.7 # Default density for DARE-TIES, can be tuned
+  density: 0.5 # Default density for DARE-TIES, can be tuned
   weight: 1.0    # Equal weighting for all models before DARE-TIES processing
 
 models:

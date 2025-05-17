@@ -36,8 +36,8 @@ The method exposes two user‑facing parameter spaces:
 Global parameters (specified once for the whole merge):
     • epsilon – numerical stability constant added to denominator (default
       1e‑8).
-    • normalise – how to normalize preconditioner tensors (sqrt(pc)) before use:
-      "none" (default), "global", "layer", or "inv".
+    • normalise – how to normalize preconditioner tensors before use:
+      "none" (default), "global", "layer", "inv", "inv-global".
 
 Per‑model tensor parameters:
     • weight – scalar weight (as in LinearMerge, default 1.0)
@@ -60,7 +60,9 @@ models:
 # (global) parameters for the merge
 parameters:
   epsilon: 1e-8
-  normalise: global        # none | global | layer | inv
+  normalise: global        # none | global | layer | inv | inv-global
+  clip_factor: 5.0       # For "inv" mode, clips weights at N × median. None/null to disable.
+  power: 0.25        # v^0.25 then inverted
 ```
 """
 
@@ -68,6 +70,7 @@ from typing import Any, Dict, List, Optional
 
 import logging
 import os
+import json # Added for model manifest
 from functools import lru_cache
 
 import safetensors
@@ -169,6 +172,8 @@ class OTAMergeTask(Task[torch.Tensor]):
     weight_info: WeightInfo
     merge_options: Optional[MergeOptions] = None
     out_path_for_detailed_logs: Optional[str] = None
+    clip_factor: Optional[float] = None
+    precond_power: float
 
     # ---------------- Task boiler‑plate ----------------
 
@@ -363,11 +368,17 @@ class OTAMergeTask(Task[torch.Tensor]):
                 )
                 
                 # Adam curvature proxy
-                precond = torch.sqrt(pc)
+                p = float(self.precond_power)
+                if p <= 0:
+                    raise ValueError("OTA power must be > 0")
+                # cast to fp32 for stability, then back to model dtype
+                precond = torch.pow(pc.float(), p).to(dtype)
+                logger.debug("OTA Task (%s): Using power p=%.3f", self.weight_info.name, p) # New logging
+
                 precond_stats = precond.float()
                 logger.debug(
-                    "OTA Task (%s): Model %s - Sqrt(PC) (precond) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
-                    self.weight_info.name, m, precond_stats.min(), precond_stats.max(), precond_stats.mean(), precond_stats.std()
+                    "OTA Task (%s): Model %s - v^p curvature (p=%.3f) stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e" %
+                    (self.weight_info.name, m, p, precond_stats.min(), precond_stats.max(), precond_stats.mean(), precond_stats.std())
                 )
 
                 # ---- Normalisation ablation ----
@@ -387,7 +398,11 @@ class OTAMergeTask(Task[torch.Tensor]):
                 elif norm_mode == "inv":
                     # For "inv" mode, precond (sqrt(pc)) is not scaled here.
                     # The inversion is applied when calculating weight_tensor.
-                    pass
+                    pass # Will be handled later
+                elif norm_mode == "inv-global":
+                    # For "inv-global" mode, precond (sqrt(pc)) is not scaled here.
+                    # The inversion and global scaling is applied when calculating weight_tensor.
+                    pass # Will be handled later
                 elif norm_mode != "none":
                     raise ValueError(f"Unknown normalisation mode for OTA: {norm_mode}")
                 # ---------------------------------
@@ -404,14 +419,42 @@ class OTAMergeTask(Task[torch.Tensor]):
                 
                 logger.debug(
                     "OTA Task (%s): Model %s - Post-normalisation (mode: %s, scale: %s) precond stats: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
-                    self.weight_info.name, m, norm_mode, log_scale_val,
+                    self.weight_info.name, m, norm_mode if norm_mode not in ["inv", "inv-global"] else "none (prior to inv/inv-global op)", log_scale_val, # Adjust log for inv modes
                     post_norm_stats.min(), post_norm_stats.max(), post_norm_stats.mean(), post_norm_stats.std()
                 )
 
-                if norm_mode == "inv":
+                if norm_mode == "inv-global":
+                    inv_tensor = 1.0 / (precond + self.epsilon)
+                    scale = inv_tensor.float().mean().to(inv_tensor.dtype) # Calculate mean in float32 for stability
+                    weight_tensor = inv_tensor / (scale + self.epsilon)
+                    logger.debug(
+                        "OTA Task (%s): Model %s - inv-global: scale=%.4e. Stats after inv-global: Min=%.4e, Max=%.4e, Mean=%.4e, Std=%.4e",
+                        self.weight_info.name, m, scale.item(), 
+                        weight_tensor.float().min(), weight_tensor.float().max(), weight_tensor.float().mean(), weight_tensor.float().std()
+                    )
+                elif norm_mode == "inv":
                     # precond is sqrt(pc)
                     weight_tensor = 1.0 / (precond + self.epsilon)
-                else:
+                    if self.clip_factor is not None and self.clip_factor > 0:
+                        cf = self.clip_factor
+                        med = weight_tensor.median()
+                        threshold = cf * med
+                        before_max = weight_tensor.max()
+                        weight_tensor = torch.clamp(weight_tensor, max=threshold)
+                        # Check if any clipping actually occurred to avoid verbose logging if not
+                        if before_max > threshold :
+                            logger.debug(
+                                "OTA Task (%s): Model %s - Clipped inv weights (factor %.1f*median=%.4e). "
+                                "Max before %.4e -> after %.4e. Median was %.4e.",
+                                self.weight_info.name, m, cf, threshold, before_max, weight_tensor.max(), med
+                            )
+                        else:
+                            logger.debug(
+                                "OTA Task (%s): Model %s - Inv weights (factor %.1f*median=%.4e) did not exceed clip threshold. "
+                                "Max was %.4e. Median was %.4e.",
+                                self.weight_info.name, m, cf, threshold, before_max, med
+                            )
+                else: # "none", "global", "layer"
                     # For "none", precond is sqrt(pc)
                     # For "global"/"layer", precond is scaled sqrt(pc)
                     weight_tensor = precond + self.epsilon
@@ -474,12 +517,24 @@ class OTAMergeTask(Task[torch.Tensor]):
                 "model.layers.0.post_attention_layernorm.weight", 
                 "model.layers.0.input_layernorm.weight",          
                 "model.layers.1.post_attention_layernorm.weight", 
+                "model.layers.5.post_attention_layernorm.weight",
+                "model.layers.10.post_attention_layernorm.weight",
+                "model.layers.15.post_attention_layernorm.weight",
+                "model.layers.20.post_attention_layernorm.weight",
+                "model.layers.25.post_attention_layernorm.weight",
                 "model.layers.31.post_attention_layernorm.weight",
                 "model.layers.0.self_attn.v_proj.weight",         
+                "model.layers.5.self_attn.v_proj.weight",
+                "model.layers.10.self_attn.v_proj.weight",
+                "model.layers.15.self_attn.v_proj.weight",
+                "model.layers.20.self_attn.v_proj.weight",
+                "model.layers.25.self_attn.v_proj.weight",
 
                 # --- Low Mean Element-wise StdDev (High Average Agreement) ---
                 "model.layers.0.self_attn.q_proj.weight",         
                 "model.layers.0.self_attn.k_proj.weight",         
+                "model.layers.10.self_attn.q_proj.weight",
+                "model.layers.20.self_attn.k_proj.weight",
                 "model.layers.23.self_attn.q_proj.weight",        
 
                 # --- High Max Element-wise StdDev (High Peak Disagreement) ---
@@ -487,10 +542,16 @@ class OTAMergeTask(Task[torch.Tensor]):
                 "lm_head.weight",                                 
                 "model.embed_tokens.weight",                      
                 "model.layers.2.self_attn.v_proj.weight",         
+                "model.layers.12.self_attn.v_proj.weight",        
+                "model.layers.22.self_attn.v_proj.weight",        
                 "model.layers.1.mlp.down_proj.weight",            
+                "model.layers.6.mlp.down_proj.weight",            
+                "model.layers.11.mlp.down_proj.weight",           
 
                 # --- Other Representative Types ---
                 "model.layers.0.mlp.gate_proj.weight",            
+                "model.layers.15.mlp.gate_proj.weight",           
+                "model.layers.30.mlp.gate_proj.weight",           
                 "model.norm.weight"                               
             ]
             
@@ -505,6 +566,43 @@ class OTAMergeTask(Task[torch.Tensor]):
                     if not os.path.exists(DETAILED_LOG_OUTPUT_DIR):
                         os.makedirs(DETAILED_LOG_OUTPUT_DIR, exist_ok=True)
                     
+                    model_identifiers = []
+                    for m_ref in models: # models is List[ModelReference] from earlier in execute()
+                        actual_model_path_or_id = None
+                        # m_ref.model can be a str or a ModelDefinition object
+                        if hasattr(m_ref.model, 'path') and m_ref.model.path: # ModelDefinition with path
+                            actual_model_path_or_id = m_ref.model.path
+                        elif hasattr(m_ref.model, 'repo_id') and m_ref.model.repo_id: # ModelDefinition with repo_id
+                            actual_model_path_or_id = m_ref.model.repo_id
+                        elif isinstance(m_ref.model, str): # Direct string path
+                            actual_model_path_or_id = m_ref.model
+                        
+                        if actual_model_path_or_id:
+                            # Heuristic: if it's a checkpoint path, get the parent dir name
+                            potential_checkpoint_name = os.path.basename(actual_model_path_or_id)
+                            parent_dir_path = os.path.dirname(actual_model_path_or_id)
+                            parent_dir_name = os.path.basename(parent_dir_path)
+
+                            if potential_checkpoint_name.startswith("checkpoint-") and parent_dir_name:
+                                model_name_for_manifest = parent_dir_name
+                            elif potential_checkpoint_name: # Not a checkpoint path, or no parent_dir_name if top-level
+                                model_name_for_manifest = potential_checkpoint_name
+                            elif parent_dir_name: # Path ended with /, checkpoint name was empty
+                                 model_name_for_manifest = parent_dir_name
+                            else: # Fallback to the full string if all else fails
+                                model_name_for_manifest = actual_model_path_or_id
+                            model_identifiers.append(model_name_for_manifest)
+                        else:
+                            # Fallback for ModelDefinition objects without path or repo_id (should be rare)
+                            # Or if m_ref.model was some other unexpected type
+                            model_identifiers.append(f"unknown_model_{len(model_identifiers)}")
+                    
+                    manifest_path = os.path.join(DETAILED_LOG_OUTPUT_DIR, "model_manifest.json")
+                    if not os.path.exists(manifest_path):
+                        with open(manifest_path, 'w') as f_manifest:
+                            json.dump(model_identifiers, f_manifest, indent=2)
+                        logger.info("OTA Task (%s): Saved model manifest to %s (Models: %s)", self.weight_info.name, manifest_path, model_identifiers)
+
                     sanitized_tensor_name = self.weight_info.name.replace("/", "_").replace(".", "-")
                     
                     weights_stack_path = os.path.join(DETAILED_LOG_OUTPUT_DIR, f"{sanitized_tensor_name}_weights_stack.pt")
@@ -569,7 +667,14 @@ class OTAMerge(MergeMethod):
     def parameters(self) -> List[ConfigParameterDef]:
         return [
             ConfigParameterDef(name="epsilon", required=False, default_value=1e-8),
-            ConfigParameterDef(name="normalise", required=False, default_value="none", description="How to normalize preconditioner tensors before use: 'none', 'global', 'layer', 'inv'")
+            ConfigParameterDef(name="normalise", required=False, default_value="none", description="How to normalize preconditioner tensors before use: 'none', 'global', 'layer', 'inv', 'inv-global'"),
+            ConfigParameterDef(name="clip_factor", required=False, default_value=None, description="For \"inv\" mode, clips weights at N * median (e.g., 5.0). Set to None or null to disable clipping. Ignored if normalise is 'inv-global'."),
+            ConfigParameterDef(
+                name="power",
+                required=False,
+                default_value=0.5,
+                description="Exponent p used for curvature weighting: weight ∝ v^p. Typical values: 0.25, 0.5, 1.0. Must be > 0."
+            )
         ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
@@ -604,6 +709,8 @@ class OTAMerge(MergeMethod):
             normalise_mode=str(parameters.get("normalise", "none")).lower(),
             weight_info=output_weight,
             merge_options=merge_options,
-            out_path_for_detailed_logs=out_path_for_debug
+            out_path_for_detailed_logs=out_path_for_debug,
+            clip_factor=parameters.get("clip_factor"),
+            precond_power=parameters.get("power", 0.5)
         )
         return task 

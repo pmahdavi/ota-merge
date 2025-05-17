@@ -4,6 +4,7 @@
 import logging
 from functools import lru_cache
 from typing import Any, List, Optional, Tuple
+import inspect  # Local import to avoid top-level dependency where not needed
 
 from mergekit import merge_methods
 from mergekit.architecture import (
@@ -225,15 +226,24 @@ class MergePlanner:
                 base_model=base_model,
             )
 
-        tensor_merge_task = tensor_merge_method.make_task(
-            output_weight=weight,
-            tensors=tensor_input_task,
-            parameters=ImmutableMap(global_params),
-            tensor_parameters=ImmutableMap(tensor_params),
-            base_model=base_model,
-            merge_options=self.options,
-            out_path_for_debug=out_path_for_debug
-        )
+        make_task_sig = inspect.signature(tensor_merge_method.make_task)
+        if 'out_path_for_debug' in make_task_sig.parameters:
+            tensor_merge_task = tensor_merge_method.make_task(
+                output_weight=weight,
+                tensors=tensor_input_task,
+                parameters=ImmutableMap(global_params),
+                tensor_parameters=ImmutableMap(tensor_params),
+                base_model=base_model,
+                out_path_for_debug=out_path_for_debug,
+            )
+        else:
+            tensor_merge_task = tensor_merge_method.make_task(
+                output_weight=weight,
+                tensors=tensor_input_task,
+                parameters=ImmutableMap(global_params),
+                tensor_parameters=ImmutableMap(tensor_params),
+                base_model=base_model,
+            )
         self._tensors.append((weight, tensor_merge_task))
 
     def plan_layer(

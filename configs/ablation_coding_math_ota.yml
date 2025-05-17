@@ -1,0 +1,19 @@
+# Note: Ensure 'preconditioner_path' for each model points to a valid file
+# containing Adam 'exp_avg_sq' tensors in safetensors format or as a torch optimizer state dict.
+models:
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/checkpoint-1111
+    parameters:
+      weight: 1.0 # Scalar fallback weight if preconditioner is not found or fails to load
+      preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/export_full_state_checkpoint-1111/exp_avg_sq.safetensors
+  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+    parameters:
+      weight: 1.0 # Scalar fallback weight
+      preconditioner_path: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/export_full_state_checkpoint-2611/exp_avg_sq.safetensors
+merge_method: ota
+parameters:
+  epsilon: 1e-10 # From latest_llama_factory_ota.yml, can be tuned
+  normalise: "global" # For ablation, you can change this to "none", "layer", "inv", or "inv-global"
+  # clip_factor: 10.0 # For "inv" mode, clips weights at N * median. Set to null to disable.
+  power: 1.0 # For ablation, you can change this to 0.5, 1.0, or 2.0
+dtype: bfloat16
+tokenizer_source: union # Added from reference configs 

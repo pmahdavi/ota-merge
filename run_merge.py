@@ -158,6 +158,26 @@ def generate_merge_name(config_file):
              if select_topk is not None:
                 components.append(f"k{select_topk}")
         
+        # Add normalise parameter if present
+        normalise_param = config_params.get('normalise')
+        if normalise_param is not None:
+            components.append(f"norm{normalise_param}")
+
+        # Add epsilon parameter if present
+        epsilon_param = config_params.get('epsilon')
+        if epsilon_param is not None:
+            components.append(f"eps{epsilon_param}")
+
+        # Add clip_factor parameter if present
+        clip_factor_param = config_params.get('clip_factor')
+        if clip_factor_param is not None:
+            components.append(f"clip{clip_factor_param}")
+
+        # Add power parameter if present
+        power_param = config_params.get('power')
+        if power_param is not None:
+            components.append(f"pow{power_param}")
+
         # Add model info
         if len(model_info) > 2:
             # Just use the count of models if many and complex name already
@@ -210,6 +230,26 @@ def generate_merge_name(config_file):
              if merge_method == 'sce':
                  select_topk = config_params.get('select_topk')
                  if select_topk is not None: simplified_components.append(f"k{select_topk}")
+
+             # Add normalise parameter to simplified name as well
+             normalise_param_simplified = config_params.get('normalise')
+             if normalise_param_simplified is not None:
+                 simplified_components.append(f"norm{normalise_param_simplified}")
+
+             # Add epsilon parameter to simplified name as well
+             epsilon_param_simplified = config_params.get('epsilon')
+             if epsilon_param_simplified is not None:
+                simplified_components.append(f"eps{epsilon_param_simplified}")
+
+             # Add clip_factor parameter to simplified name as well
+             clip_factor_param_simplified = config_params.get('clip_factor')
+             if clip_factor_param_simplified is not None:
+                simplified_components.append(f"clip{clip_factor_param_simplified}")
+
+             # Add power parameter to simplified name as well
+             power_param_simplified = config_params.get('power')
+             if power_param_simplified is not None:
+                simplified_components.append(f"pow{power_param_simplified}")
 
              simplified_components.append(f"{len(model_info)}models")
              merge_name = "_".join(simplified_components)
