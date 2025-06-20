@@ -1,0 +1,15 @@
+merge_method: ffg
+base_model: meta-llama/Meta-Llama-3.1-8B
+
+parameters:
+  density: 0.3       # keep 30% of parameters (as used in notebook)
+  metric: fisher       # use fisher information metric
+
+models:
+  - model: meta-llama/Meta-Llama-3.1-8B        # base model (w_0)
+  - model: pmahdavi/Llama-3.1-8B-coding        # fine-tuned model (w_T)
+    parameters:
+      preconditioner_path: /scratch/pxm5426/runs/lora-exploration/FFG/exp_avg_sq.safetensors
+
+dtype: bfloat16
+tokenizer_source: union 

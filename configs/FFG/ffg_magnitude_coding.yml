@@ -1,0 +1,13 @@
+merge_method: ffg
+base_model: meta-llama/Meta-Llama-3.1-8B
+
+parameters:
+  density: 0.30        # keep 10% of parameters 
+  metric: magnitude    # use magnitude-based metric (no fisher needed)
+
+models:
+  - model: meta-llama/Meta-Llama-3.1-8B        # base model (w_0)
+  - model: pmahdavi/Llama-3.1-8B-coding        # fine-tuned model (w_T)
+
+dtype: bfloat16
+tokenizer_source: union 

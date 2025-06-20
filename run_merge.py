@@ -157,6 +157,13 @@ def generate_merge_name(config_file):
                 components.append(f"d{density}")
              if select_topk is not None:
                 components.append(f"k{select_topk}")
+        elif merge_method == 'ffg':
+             density = config_params.get('density')
+             metric = config_params.get('metric')
+             if density is not None:
+                 components.append(f"d{density}")
+             if metric is not None and metric != 'fisher': # Fisher is default, only include when different
+                 components.append(metric)
         
         # Add normalise parameter if present
         normalise_param = config_params.get('normalise')
@@ -291,7 +298,7 @@ def get_system_info():
     try:
         import torch
         system_info["cuda_available"] = torch.cuda.is_available()
-        system_info["cuda_version"] = torch.version.cuda if torch.cuda.is_available() else "N/A"
+        system_info["cuda_version"] = torch.version.cuda if torch.cuda.is_available() else "N/A"  # type: ignore[attr-defined]
         system_info["torch_version"] = torch.__version__
     except ImportError:
         system_info["cuda_available"] = "Unknown (torch not installed)"
