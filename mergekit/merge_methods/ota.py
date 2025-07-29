@@ -154,16 +154,18 @@ class OTAMergeTask(Task[torch.Tensor]):
     def _prepare_and_stack_tensors(
         self, tensor_list: List[torch.Tensor]
     ) -> torch.Tensor:
-        """Rectify, validate, and stack input tensors."""
+        """Rectify, validate, and stack input tensors in fp32."""
         rectify_embed_sizes(self.weight_info, tensor_list)
 
-        unique_shapes = {t.shape for t in tensor_list}
+        tensor_list_fp32 = [t.to(torch.float32) for t in tensor_list]
+
+        unique_shapes = {t.shape for t in tensor_list_fp32}
         if len(unique_shapes) != 1:
             raise RuntimeError(
                 f"Tensor size mismatch for {self.weight_info.name}, sizes: {list(unique_shapes)}"
             )
 
-        return torch.stack(tensor_list, dim=0)
+        return torch.stack(tensor_list_fp32, dim=0)
 
     def _get_and_load_preconditioner(
         self, model: ModelReference, tensor: torch.Tensor, device: torch.device
@@ -204,13 +206,13 @@ class OTAMergeTask(Task[torch.Tensor]):
         return mask
 
     def _transform_and_scale_preconditioner(
-        self, pc: torch.Tensor, model: ModelReference, dtype: torch.dtype
+        self, pc: torch.Tensor, model: ModelReference
     ) -> torch.Tensor:
-        """Apply power transformation and scaling factor."""
+        """Apply power transformation and scaling factor in fp32."""
         p = float(self.precond_power)
         if p <= 0:
             raise ValueError("OTA power must be > 0")
-        precond = torch.pow(pc, p).to(dtype)
+        precond = torch.pow(pc, p)  # Remains fp32
 
         params = self.tensor_parameters[model]
         scaling_factor = float(params.get("scaling_factor", 1.0))
@@ -218,12 +220,10 @@ class OTAMergeTask(Task[torch.Tensor]):
             precond = precond * scaling_factor
         return precond
 
-    def _normalize_preconditioner(
-        self, precond: torch.Tensor, dtype: torch.dtype
-    ) -> torch.Tensor:
-        """Normalize the preconditioner tensor."""
+    def _normalize_preconditioner(self, precond: torch.Tensor) -> torch.Tensor:
+        """Normalize the preconditioner tensor in fp32."""
         if self.normalise_mode == "global":
-            scale = precond.float().mean().to(dtype)
+            scale = precond.mean()  # Already fp32, .float() is redundant
             return precond / (scale + self.epsilon)
         if self.normalise_mode != "none":
             raise ValueError(f"Unknown normalisation mode for OTA: {self.normalise_mode}")
@@ -234,21 +234,21 @@ class OTAMergeTask(Task[torch.Tensor]):
         model: ModelReference,
         tensor: torch.Tensor,
         device: torch.device,
-        dtype: torch.dtype,
     ) -> torch.Tensor:
-        """Calculate the weighting tensor for a single model."""
-        pc = self._get_and_load_preconditioner(model, tensor, device)
-        mask = self._apply_preconditioner_mask(pc, model)
+        """Calculate the weighting tensor for a single model in fp32."""
+        pc = self._get_and_load_preconditioner(model, tensor, device)  # returns fp32
+        mask = self._apply_preconditioner_mask(pc, model)  # returns boolean mask
 
-        precond = self._transform_and_scale_preconditioner(pc, model, dtype)
-        precond = self._normalize_preconditioner(precond, dtype)
+        precond = self._transform_and_scale_preconditioner(pc, model)  # returns fp32
+        precond = self._normalize_preconditioner(precond)  # returns fp32
 
-        weight_tensor = precond + self.epsilon
+        weight_tensor = precond + self.epsilon  # fp32
 
         if mask is not None:
-            weight_tensor = weight_tensor * mask.to(dtype)
+            # mask is boolean, multiplication promotes it to float32
+            weight_tensor = weight_tensor * mask
 
-        return weight_tensor.float()
+        return weight_tensor  # Already fp32, .float() is redundant
 
     def _compute_weighting_tensors(
         self, models: List[ModelReference], stacked_tensors: torch.Tensor
@@ -265,7 +265,6 @@ class OTAMergeTask(Task[torch.Tensor]):
                 model=m,
                 tensor=stacked_tensors[i],
                 device=stacked_tensors.device,
-                dtype=stacked_tensors.dtype,
             )
             for i, m in enumerate(models)
         ]
@@ -322,6 +321,9 @@ class OTAMergeTask(Task[torch.Tensor]):
         models = list(tensors.keys())
         tensor_list = [tensors[m] for m in models]
 
+        # Get original dtype from the first model tensor
+        original_dtype = tensor_list[0].dtype
+
         stacked_tensors = self._prepare_and_stack_tensors(tensor_list)
         weights_stack = self._compute_weighting_tensors(models, stacked_tensors)
 
@@ -336,7 +338,7 @@ class OTAMergeTask(Task[torch.Tensor]):
             merged_stats.mean(),
             merged_stats.std(),
         )
-        return merged
+        return merged.to(original_dtype)
 
     def group_label(self) -> Optional[str]:
         return self.gather_tensors.group_label()

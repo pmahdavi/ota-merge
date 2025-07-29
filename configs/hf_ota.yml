@@ -4,7 +4,7 @@ parameters:
   epsilon: 1e-16 # Default epsilon for OTA, can be tuned
   normalise: none
   power: 0.5
-  precond_threshold: 1e-14  # Mask elements where precond < threshold
+  precond_threshold: 1e-11  # Mask elements where precond < threshold
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning

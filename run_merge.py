@@ -52,12 +52,11 @@ else
     echo "Warning: ~/.tcshrc not found in the home directory!"
 endif
 
-# Activate the mergekit conda environment
-# Note: It's better to source the conda init script and then activate
-# to ensure it works reliably in non-interactive shells.
+# Initialize Conda for the current shell to make the 'conda' command available.
+# The 'conda run' command will be used instead of 'conda activate' for better
+# reliability in non-interactive shells.
 if (-e $HOME/miniconda3/bin/conda) then
     eval `$HOME/miniconda3/bin/conda shell.tcsh hook`
-    conda activate mergekit
 else
     echo "Warning: Conda not found, attempting to run mergekit directly."
 endif
@@ -73,9 +72,9 @@ echo "Output directory: {output_dir}"
 # Ensure output directory exists
 mkdir -p {output_dir}
 
-# Run mergekit with the config file
+# Run mergekit with the config file using 'conda run'
 # Usage: mergekit-yaml [OPTIONS] CONFIG_FILE OUT_PATH
-mergekit-yaml {options} {config_file} {output_dir}
+conda run -n mergekit mergekit-yaml {options} {config_file} {output_dir}
 
 echo "Merge completed!"
 echo "Output directory: {output_dir}"
@@ -131,7 +130,7 @@ def generate_merge_name(config_file):
             if power is not None: h_params.append(f"pow{power}")
             
             threshold = config_params.get('precond_threshold')
-            if threshold is not None: h_params.append(f"precond-thresh{threshold:.0e}")
+            if threshold is not None: h_params.append(f"precond-thresh{float(threshold):.0e}")
 
         # Common hyperparameters
         normalise = config_params.get('normalise')
@@ -140,7 +139,7 @@ def generate_merge_name(config_file):
             
         epsilon = config_params.get('epsilon')
         if epsilon is not None:
-             h_params.append(f"eps{epsilon:.0e}")
+             h_params.append(f"eps{float(epsilon):.0e}")
 
         # --- Assemble Name ---
         components = [merge_method]
