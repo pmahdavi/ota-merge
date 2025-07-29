@@ -1,10 +1,13 @@
 models:
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/checkpoint-1111
+  - model: pmahdavi/Llama-3.1-8B-coding
     parameters:
-      weight: 0.5
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+      weight: 1.0
+  - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
-      weight: 0.5
+      weight: 1.0
+  - model: pmahdavi/Llama-3.1-8B-precise-if
+    parameters:
+      weight: 1.0
 merge_method: linear
 dtype: bfloat16
 tokenizer_source: union 

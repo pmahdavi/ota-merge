@@ -38,7 +38,7 @@ def create_pbs_script(config_file, merge_method, output_dir, walltime, ngpus, nc
 #PBS -l walltime={walltime}
 #PBS -q workq@{hostname}
 #PBS -N {job_name}
-#PBS -M pxm5426@psu.edu 
+#PBS -M pxm5426@psu.edu
 #PBS -m bea
 #PBS -l mem={mem}
 #PBS -o pbs_results/
@@ -52,6 +52,17 @@ else
     echo "Warning: ~/.tcshrc not found in the home directory!"
 endif
 
+# Activate the mergekit conda environment
+# Note: It's better to source the conda init script and then activate
+# to ensure it works reliably in non-interactive shells.
+if (-e $HOME/miniconda3/bin/conda) then
+    eval `$HOME/miniconda3/bin/conda shell.tcsh hook`
+    conda activate mergekit
+else
+    echo "Warning: Conda not found, attempting to run mergekit directly."
+endif
+
+
 # Set the project for wandb
 setenv WANDB_PROJECT "mergekit-llama"
 
@@ -62,9 +73,6 @@ echo "Output directory: {output_dir}"
 # Ensure output directory exists
 mkdir -p {output_dir}
 
-# Activate the mergekit conda environment
-conda activate mergekit
-
 # Run mergekit with the config file
 # Usage: mergekit-yaml [OPTIONS] CONFIG_FILE OUT_PATH
 mergekit-yaml {options} {config_file} {output_dir}
@@ -74,196 +82,81 @@ echo "Output directory: {output_dir}"
 """
     return pbs_script, hostname
 
+def _shorten_model_name(model_path: str) -> str:
+    """Creates a shorter, more readable name from a model path."""
+    name = Path(model_path).name
+    
+    # Rule for HF model names like 'pmahdavi/Llama-3.1-8B-math-reasoning'
+    if 'Llama-3.1-8B-' in name:
+        return name.split('Llama-3.1-8B-')[-1]
+
+    # Rule for local checkpoints
+    if name.startswith('checkpoint-'):
+        parent_name = Path(model_path).parent.name
+        if 'mixture_' in parent_name:
+            return parent_name.split('mixture_')[-1].split('_full')[0]
+        return parent_name
+
+    # Fallback to the original name if no rules match
+    return name
+
 def generate_merge_name(config_file):
     """Generate an adaptive name for the merge job based on the config file."""
     try:
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
         
-        # Extract merge method
         merge_method = config.get('merge_method', 'unknown')
         
-        # Extract base model name if present
-        base_model = None
-        if 'base_model' in config:
-            base_model = Path(config['base_model']).name
-        
-        # Get model names and weights from the config
-        model_info = []  # List to store tuples of (model_name, weight)
+        # --- Model Names ---
+        model_names = []
         if 'models' in config and isinstance(config['models'], list):
             for model_entry in config['models']:
                 if 'model' in model_entry:
-                    # Extract just the final part of the path or model name
-                    model_path = model_entry['model']
-                    model_name = Path(model_path).name
-                    
-                    # Get weight if available - look in model-specific and global parameters
-                    weight = None
-                    if 'parameters' in model_entry and 'weight' in model_entry['parameters']:
-                        weight = model_entry['parameters']['weight']
-                    elif 'parameters' in config and 'weight' in config['parameters']:
-                        # Check global params if not found in model-specific
-                        weight = config['parameters']['weight']
-
-                    # For checkpoint directories, take the parent directory name
-                    if model_name.startswith('checkpoint-'):
-                        parent_dir_name = Path(model_path).parent.name
-                        # Extract just the model name without parameters if possible
-                        parts = parent_dir_name.split('_')
-                        # Heuristic: Often the key part is after Llama-3.1-8B_tulu3_mixture_
-                        name_parts = parent_dir_name.split('mixture_') 
-                        if len(name_parts) > 1:
-                           short_name = name_parts[1].split('_full')[0] # Get text after mixture_ and before _full
-                           model_name = short_name if short_name else parent_dir_name # Use full if split fails
-                        else: 
-                           model_name = parent_dir_name # Fallback to parent dir name
-                    
-                    model_info.append((model_name, weight))
+                    short_name = _shorten_model_name(model_entry['model'])
+                    model_names.append(short_name)
         
-        # Get just the model names for convenience
-        # model_names = [info[0] for info in model_info] # Not strictly needed now
-        
-        # Build the merge name
-        components = []
-        
-        # Use base model if available
-        if base_model:
-            components.append(base_model)
-        
-        # Add type of merge
-        components.append(merge_method)
-
-        # Add hyperparameters for specific methods
+        # --- Hyperparameters ---
+        h_params = []
         config_params = config.get('parameters', {})
-        if merge_method == 'dare_ties' or merge_method == 'dare_linear':
-            density = config_params.get('density')
-            if density is not None:
-                components.append(f"d{density}")
-        elif merge_method == 'breadcrumbs' or merge_method == 'breadcrumbs_ties':
-            density = config_params.get('density')
-            gamma = config_params.get('gamma')
-            if density is not None:
-                components.append(f"d{density}")
-            if gamma is not None:
-                components.append(f"g{gamma}")
-        elif merge_method == 'ties': # Add density for ties as well
-             density = config_params.get('density')
-             if density is not None:
-                components.append(f"d{density}")
-        elif merge_method == 'sce':
-             density = config_params.get('density')
-             select_topk = config_params.get('select_topk')
-             if density is not None:
-                components.append(f"d{density}")
-             if select_topk is not None:
-                components.append(f"k{select_topk}")
-        elif merge_method == 'ffg':
-             density = config_params.get('density')
-             metric = config_params.get('metric')
-             if density is not None:
-                 components.append(f"d{density}")
-             if metric is not None and metric != 'fisher': # Fisher is default, only include when different
-                 components.append(metric)
         
-        # Add normalise parameter if present
-        normalise_param = config_params.get('normalise')
-        if normalise_param is not None:
-            components.append(f"norm{normalise_param}")
-
-        # Add epsilon parameter if present
-        epsilon_param = config_params.get('epsilon')
-        if epsilon_param is not None:
-            components.append(f"eps{epsilon_param}")
-
-        # Add clip_factor parameter if present
-        clip_factor_param = config_params.get('clip_factor')
-        if clip_factor_param is not None:
-            components.append(f"clip{clip_factor_param}")
-
-        # Add power parameter if present
-        power_param = config_params.get('power')
-        if power_param is not None:
-            components.append(f"pow{power_param}")
-
-        # Add model info
-        if len(model_info) > 2:
-            # Just use the count of models if many and complex name already
-             if len(components) <= 2: # Add count if name isn't already long
-                components.append(f"{len(model_info)}models")
-        elif len(model_info) > 0:
-            # Use model names with weights, without character limits
-            model_parts = []
-            has_weights = any(w is not None for _, w in model_info)
-
-            for name, weight in model_info:
-                if weight is not None and has_weights: # Only add weight if specified and relevant
-                    # Format weight to remove trailing zeros if they exist after decimal
-                    weight_str = f"{weight:.2f}".rstrip('0').rstrip('.') if isinstance(weight, float) and '.' in str(weight) else str(weight)
-                    # Use full model name without character limit
-                    model_part = f"{name}w{weight_str}"
-                else:
-                    # Use full model name without character limit
-                    model_part = name
-                # Shorten model names for the directory name if too long? - Keep full for now
-                model_parts.append(model_part) 
+        # Method-specific hyperparameters
+        if merge_method in ['dare_ties', 'dare_linear', 'ties', 'sce', 'breadcrumbs', 'breadcrumbs_ties', 'ffg']:
+            density = config_params.get('density')
+            if density is not None: h_params.append(f"d{density}")
+        
+        # OTA-specific hyperparameters
+        if merge_method == 'ota':
+            power = config_params.get('power')
+            if power is not None: h_params.append(f"pow{power}")
             
-            model_str = "-".join(model_parts)
-            # Only add model string if it doesn't make the name excessively long
-            if len(model_str) < 80 : # Arbitrary limit to avoid overly long dir names
-               components.append(model_str)
-            else:
-               components.append(f"{len(model_info)}models")
+            threshold = config_params.get('precond_threshold')
+            if threshold is not None: h_params.append(f"precond-thresh{threshold:.0e}")
 
+        # Common hyperparameters
+        normalise = config_params.get('normalise')
+        if normalise is not None and normalise != 'none':
+            h_params.append(f"norm{normalise}")
+            
+        epsilon = config_params.get('epsilon')
+        if epsilon is not None:
+             h_params.append(f"eps{epsilon:.0e}")
 
-        # Create the final merge name
-        merge_name = "_".join(components)
-        # Sanitize name (replace problematic characters if any - though unlikely with current components)
-        merge_name = merge_name.replace('/', '-').replace(' ', '_') 
+        # --- Assemble Name ---
+        components = [merge_method]
         
-        # Limit overall length?
-        max_len = 150 # Max reasonable length for directory name
-        if len(merge_name) > max_len:
-             # If too long, fallback to a simpler name structure
-             simplified_components = []
-             if base_model: simplified_components.append(base_model)
-             simplified_components.append(merge_method)
-             # Add key hyperparameters back
-             if merge_method in ['dare_ties', 'dare_linear', 'ties', 'sce', 'breadcrumbs', 'breadcrumbs_ties']:
-                 density = config_params.get('density')
-                 if density is not None: simplified_components.append(f"d{density}")
-             if merge_method in ['breadcrumbs', 'breadcrumbs_ties']:
-                 gamma = config_params.get('gamma')
-                 if gamma is not None: simplified_components.append(f"g{gamma}")
-             if merge_method == 'sce':
-                 select_topk = config_params.get('select_topk')
-                 if select_topk is not None: simplified_components.append(f"k{select_topk}")
+        if model_names:
+            components.append("-".join(model_names))
+            
+        if h_params:
+            components.append("_".join(h_params))
 
-             # Add normalise parameter to simplified name as well
-             normalise_param_simplified = config_params.get('normalise')
-             if normalise_param_simplified is not None:
-                 simplified_components.append(f"norm{normalise_param_simplified}")
+        merge_name = "_".join(components)
+        
+        # Sanitize and limit length
+        merge_name = merge_name.replace('/', '-').replace(' ', '_')
+        return merge_name[:150]
 
-             # Add epsilon parameter to simplified name as well
-             epsilon_param_simplified = config_params.get('epsilon')
-             if epsilon_param_simplified is not None:
-                simplified_components.append(f"eps{epsilon_param_simplified}")
-
-             # Add clip_factor parameter to simplified name as well
-             clip_factor_param_simplified = config_params.get('clip_factor')
-             if clip_factor_param_simplified is not None:
-                simplified_components.append(f"clip{clip_factor_param_simplified}")
-
-             # Add power parameter to simplified name as well
-             power_param_simplified = config_params.get('power')
-             if power_param_simplified is not None:
-                simplified_components.append(f"pow{power_param_simplified}")
-
-             simplified_components.append(f"{len(model_info)}models")
-             merge_name = "_".join(simplified_components)
-
-
-        return merge_name
-    
     except Exception as e:
         print(f"Warning: Could not parse config file or generate name: {e}", file=sys.stderr)
         return f'mergekit_fallback_{Path(config_file).stem}'

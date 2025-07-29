@@ -17,7 +17,6 @@ from mergekit.merge_methods.passthrough import PassthroughMerge
 from mergekit.merge_methods.slerp import SlerpMerge
 from mergekit.merge_methods.ota import OTAMerge
 from mergekit.sparsify import SparsificationMethod
-from mergekit.merge_methods.ffg import FFGMerge
 
 STATIC_MERGE_METHODS: List[MergeMethod] = [
     LinearMerge(),
@@ -28,7 +27,6 @@ STATIC_MERGE_METHODS: List[MergeMethod] = [
     ArceeFusionMerge(),
     KarcherMerge(),
     OTAMerge(),
-    FFGMerge(),
     # generalized task arithmetic methods
     GeneralizedTaskArithmeticMerge(
         consensus_method=None,
