@@ -127,6 +127,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     merge_options: Optional[MergeOptions] = None
     precond_power: float
     precond_threshold: Optional[float] = None
+    base_model_ref: Optional[ModelReference] = None
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
 
     def model_post_init(self, __context: Any) -> None:
@@ -181,23 +182,46 @@ class OTAMergeTask(Task[torch.Tensor]):
         return pc.to(device=device, dtype=torch.float32)
 
     def _apply_preconditioner_mask(
-        self, pc: torch.Tensor, model: ModelReference
+        self,
+        pc: torch.Tensor,
+        model: ModelReference,
+        specialist_tensor: Optional[torch.Tensor] = None,
+        base_tensor: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
         """Apply a threshold to the preconditioner and return a mask."""
         if self.precond_threshold is None:
             return None
 
         threshold = float(self.precond_threshold)
-        mask = pc >= threshold
+        log_message = ""
+
+        if (
+            self.base_model_ref
+            and base_tensor is not None
+            and specialist_tensor is not None
+        ):
+            # New Fisher-based masking logic
+            task_vector = specialist_tensor.to(torch.float32) - base_tensor.to(
+                torch.float32
+            )
+            score = pc * torch.pow(task_vector, 2)
+            mask = score >= threshold
+            log_message = "Applying Fisher-based precond threshold"
+        else:
+            # Original masking logic
+            mask = pc >= threshold
+            log_message = "Applying precond threshold"
+
         num_masked = (~mask).sum().item()
         total_elements = pc.numel()
         mask_percentage = (
             (num_masked / total_elements) * 100 if total_elements > 0 else 0
         )
         logger.info(
-            "OTA Task (%s): Model %s - Applying precond threshold %.4e. Masked %d/%d elements (%.2f%%)",
+            "OTA Task (%s): Model %s - %s %.4e. Masked %d/%d elements (%.2f%%)",
             self.weight_info.name,
             model,
+            log_message,
             threshold,
             num_masked,
             total_elements,
@@ -234,10 +258,13 @@ class OTAMergeTask(Task[torch.Tensor]):
         model: ModelReference,
         tensor: torch.Tensor,
         device: torch.device,
+        base_tensor: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Calculate the weighting tensor for a single model in fp32."""
         pc = self._get_and_load_preconditioner(model, tensor, device)  # returns fp32
-        mask = self._apply_preconditioner_mask(pc, model)  # returns boolean mask
+        mask = self._apply_preconditioner_mask(
+            pc, model, specialist_tensor=tensor, base_tensor=base_tensor
+        )  # returns boolean mask
 
         precond = self._transform_and_scale_preconditioner(pc, model)  # returns fp32
         precond = self._normalize_preconditioner(precond)  # returns fp32
@@ -251,7 +278,10 @@ class OTAMergeTask(Task[torch.Tensor]):
         return weight_tensor  # Already fp32, .float() is redundant
 
     def _compute_weighting_tensors(
-        self, models: List[ModelReference], stacked_tensors: torch.Tensor
+        self,
+        models: List[ModelReference],
+        stacked_tensors: torch.Tensor,
+        base_tensor: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute element-wise weighting tensors for all models."""
         logger.info(
@@ -265,6 +295,7 @@ class OTAMergeTask(Task[torch.Tensor]):
                 model=m,
                 tensor=stacked_tensors[i],
                 device=stacked_tensors.device,
+                base_tensor=base_tensor,
             )
             for i, m in enumerate(models)
         ]
@@ -318,14 +349,37 @@ class OTAMergeTask(Task[torch.Tensor]):
         self, tensors: Dict[ModelReference, torch.Tensor], **_kwargs
     ) -> torch.Tensor:
         logger.info("OTA Task: Processing tensor '%s'", self.weight_info.name)
-        models = list(tensors.keys())
-        tensor_list = [tensors[m] for m in models]
+
+        if self.base_model_ref:
+            if self.base_model_ref not in tensors:
+                raise ValueError(
+                    f"Base model '{self.base_model_ref}' tensor not found for {self.weight_info.name}"
+                )
+            base_tensor = tensors[self.base_model_ref]
+            models_to_merge = [m for m in tensors if m != self.base_model_ref]
+        else:
+            base_tensor = None
+            models_to_merge = list(tensors.keys())
+
+        tensor_list = [tensors[m] for m in models_to_merge]
+
+        if not tensor_list:
+            # This can happen if the only model provided is the base model.
+            if base_tensor is not None:
+                logger.warning(
+                    "OTA Task (%s): No models to merge (only a base model was provided). Returning the base model's tensor without changes.",
+                    self.weight_info.name,
+                )
+                return base_tensor.to(tensors[self.base_model_ref].dtype)
+            raise ValueError(f"No tensors provided to merge for {self.weight_info.name}")
 
         # Get original dtype from the first model tensor
         original_dtype = tensor_list[0].dtype
 
         stacked_tensors = self._prepare_and_stack_tensors(tensor_list)
-        weights_stack = self._compute_weighting_tensors(models, stacked_tensors)
+        weights_stack = self._compute_weighting_tensors(
+            models_to_merge, stacked_tensors, base_tensor
+        )
 
         merged = self._perform_weighted_merge(stacked_tensors, weights_stack)
 
@@ -482,19 +536,24 @@ class OTAMerge(MergeMethod):
     def parameters(self) -> List[ConfigParameterDef]:
         return [
             ConfigParameterDef(name="epsilon", required=False, default_value=1e-8),
-            ConfigParameterDef(name="normalise", required=False, default_value="none", description="How to normalize preconditioner tensors before use: 'none', 'global'"),
+            ConfigParameterDef(
+                name="normalise",
+                required=False,
+                default_value="none",
+                description="How to normalize preconditioner tensors before use: 'none', 'global'",
+            ),
             ConfigParameterDef(
                 name="power",
                 required=False,
                 default_value=0.5,
-                description="Exponent p used for curvature weighting: weight ∝ v^p. Typical values: 0.25, 0.5, 1.0. Must be > 0."
+                description="Exponent p used for curvature weighting: weight ∝ v^p. Typical values: 0.25, 0.5, 1.0. Must be > 0.",
             ),
             ConfigParameterDef(
                 name="precond_threshold",
                 required=False,
                 default_value=None,
-                description="Element-wise threshold for preconditioner values. Elements with precond values below this threshold will be masked out (set to zero). Applied to raw preconditioner values before power transformation."
-            )
+                description="Element-wise threshold for preconditioner values. Elements with precond values below this threshold will be masked out (set to zero). Applied to raw preconditioner values before power transformation.",
+            ),
         ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
@@ -524,6 +583,7 @@ class OTAMerge(MergeMethod):
             weight_info=output_weight,
             merge_options=merge_options,
             precond_power=parameters.get("power", 0.5),
-            precond_threshold=parameters.get("precond_threshold")
+            precond_threshold=parameters.get("precond_threshold"),
+            base_model_ref=base_model,
         )
         return task 
