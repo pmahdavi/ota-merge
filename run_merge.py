@@ -129,7 +129,7 @@ def generate_merge_name(config_file):
             if density is not None: h_params.append(f"d{density}")
         
         # OTA-specific hyperparameters
-        if merge_method == 'ota':
+        if 'ota' in merge_method:
             power = config_params.get('power')
             if power is not None: h_params.append(f"pow{power}")
             

@@ -128,6 +128,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     precond_power: float
     precond_threshold: Optional[float] = None
     base_model_ref: Optional[ModelReference] = None
+    fallback_to_base: bool = False
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
 
     def model_post_init(self, __context: Any) -> None:
@@ -303,7 +304,10 @@ class OTAMergeTask(Task[torch.Tensor]):
         return torch.stack(weight_tensors, dim=0)
 
     def _perform_weighted_merge(
-        self, stacked_tensors: torch.Tensor, weights_stack: torch.Tensor
+        self,
+        stacked_tensors: torch.Tensor,
+        weights_stack: torch.Tensor,
+        base_tensor: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Perform the element-wise weighted merge with a fallback for fully masked elements."""
         numerator = (weights_stack * stacked_tensors).sum(dim=0)
@@ -327,19 +331,33 @@ class OTAMergeTask(Task[torch.Tensor]):
             percentage = (
                 (n_masked_elements / total_elements * 100) if total_elements > 0 else 0
             )
+
+            fallback_value: torch.Tensor
+            log_message: str
+
+            if self.fallback_to_base and base_tensor is not None:
+                fallback_value = base_tensor.to(
+                    dtype=merged_tensor.dtype, device=merged_tensor.device
+                )
+                log_message = "Falling back to base model value for these elements."
+            else:
+                fallback_value = stacked_tensors.mean(dim=0)
+                log_message = "Falling back to simple average for these elements."
+
             logger.warning(
-                "OTA Task (%s): %d/%d elements (%.2f%%) have all models masked due to precond_threshold=%.1e. "
-                "Falling back to simple average for these elements.",
+                "OTA Task (%s): %d/%d elements (%.2f%%) have all models masked due to precond_threshold=%.1e. %s",
                 self.weight_info.name,
                 n_masked_elements,
                 total_elements,
                 percentage,
                 self.precond_threshold,
+                log_message,
             )
 
-            simple_avg = stacked_tensors.mean(dim=0)
-            # For the fully masked elements, use a simple average instead of the OTA result.
-            merged_tensor = torch.where(fully_masked_mask, simple_avg, merged_tensor)
+            # For the fully masked elements, use the chosen fallback value.
+            merged_tensor = torch.where(
+                fully_masked_mask, fallback_value, merged_tensor
+            )
 
         return merged_tensor
 
@@ -381,7 +399,7 @@ class OTAMergeTask(Task[torch.Tensor]):
             models_to_merge, stacked_tensors, base_tensor
         )
 
-        merged = self._perform_weighted_merge(stacked_tensors, weights_stack)
+        merged = self._perform_weighted_merge(stacked_tensors, weights_stack, base_tensor)
 
         merged_stats = merged.float()
         logger.info(
@@ -554,6 +572,12 @@ class OTAMerge(MergeMethod):
                 default_value=None,
                 description="Element-wise threshold for preconditioner values. Elements with precond values below this threshold will be masked out (set to zero). Applied to raw preconditioner values before power transformation.",
             ),
+            ConfigParameterDef(
+                name="fallback_to_base",
+                required=False,
+                default_value=False,
+                description="If true, fully masked elements will revert to the base model's value instead of a simple average.",
+            ),
         ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
@@ -585,5 +609,6 @@ class OTAMerge(MergeMethod):
             precond_power=parameters.get("power", 0.5),
             precond_threshold=parameters.get("precond_threshold"),
             base_model_ref=base_model,
+            fallback_to_base=parameters.get("fallback_to_base", False),
         )
         return task 

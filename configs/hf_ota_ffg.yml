@@ -5,7 +5,8 @@ parameters:
   epsilon: 1e-24 # Default epsilon for OTA, can be tuned
   normalise: none
   power: 0.5
-  precond_threshold: 1e-18  # Mask elements where (v * (w_t - w_0)^2) < threshold
+  precond_threshold: 1e-20  # Mask elements where (v * (w_t - w_0)^2) < threshold
+  fallback_to_base: true # Fallback to base model for fully masked elements
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
