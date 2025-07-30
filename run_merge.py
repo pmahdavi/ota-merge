@@ -107,6 +107,10 @@ def generate_merge_name(config_file):
         
         merge_method = config.get('merge_method', 'unknown')
         
+        # If OTA merge has a base_model, it's the Fisher-grafting variant
+        if merge_method == 'ota' and 'base_model' in config:
+            merge_method = 'ota-ffg'
+
         # --- Model Names ---
         model_names = []
         if 'models' in config and isinstance(config['models'], list):
