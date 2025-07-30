@@ -136,6 +136,15 @@ def generate_merge_name(config_file):
             threshold = config_params.get('precond_threshold')
             if threshold is not None: h_params.append(f"precond-thresh{float(threshold):.0e}")
 
+            # Check for rank in per-model parameters
+            if 'models' in config and isinstance(config['models'], list):
+                for model_entry in config['models']:
+                    model_params = model_entry.get('parameters', {})
+                    rank = model_params.get('rank')
+                    if rank is not None:
+                        h_params.append(f"rank{rank}")
+                        break  # Assume rank is the same for all, just need it once for the name
+
         # Common hyperparameters
         normalise = config_params.get('normalise')
         if normalise is not None and normalise != 'none':

@@ -263,6 +263,31 @@ class OTAMergeTask(Task[torch.Tensor]):
     ) -> torch.Tensor:
         """Calculate the weighting tensor for a single model in fp32."""
         pc = self._get_and_load_preconditioner(model, tensor, device)  # returns fp32
+
+        # --- SVD approximation logic ---
+        params = self.tensor_parameters[model]
+        rank = params.get("rank")
+
+        if rank and pc.ndim == 2 and not getattr(self.weight_info, "is_embed", False):
+            logger.info(
+                "OTA Task (%s): Applying randomized SVD with rank=%s for model %s",
+                self.weight_info.name,
+                rank,
+                model,
+            )
+            try:
+                rank_int = int(rank)
+                U, S, V = torch.svd_lowrank(pc, q=rank_int)
+                pc = U @ torch.diag(S) @ V.mH
+            except Exception as e:
+                logger.warning(
+                    "OTA Task (%s): SVD approximation failed for model %s with error: %s. Proceeding with full preconditioner.",
+                    self.weight_info.name,
+                    model,
+                    e,
+                )
+        # --- End SVD logic ---
+
         mask = self._apply_preconditioner_mask(
             pc, model, specialist_tensor=tensor, base_tensor=base_tensor
         )  # returns boolean mask
@@ -585,6 +610,7 @@ class OTAMerge(MergeMethod):
         return [
             ConfigParameterDef(name="preconditioner_path", required=True),
             ConfigParameterDef(name="scaling_factor", required=False, default_value=1.0, description="Optional multiplicative factor applied to this model's preconditioner to allow intensity normalisation across models."),
+            ConfigParameterDef(name="rank", required=False, default_value=None, description="If specified, use a rank-r SVD approximation of the preconditioner. Only applied to 2D tensors that are not embedding layers."),
         ]
 
     # ---- Task creation ----
