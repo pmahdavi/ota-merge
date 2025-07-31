@@ -267,18 +267,56 @@ class OTAMergeTask(Task[torch.Tensor]):
         # --- SVD approximation logic ---
         params = self.tensor_parameters[model]
         rank = params.get("rank")
+        use_rank1_approx = params.get("rank1_approx", False)
 
-        if rank and pc.ndim == 2 and not getattr(self.weight_info, "is_embed", False):
+        if use_rank1_approx and pc.ndim == 2:
             logger.info(
-                "OTA Task (%s): Applying randomized SVD with rank=%s for model %s",
+                "OTA Task (%s): Applying Lemma 1 rank-1 approximation for model %s",
+                self.weight_info.name,
+                model,
+            )
+            try:
+                total_sum = pc.sum()
+                if total_sum != 0:
+                    r_sums = pc.sum(dim=1, keepdim=True)  # Column vector R
+                    c_sums = pc.sum(dim=0, keepdim=True)  # Row vector for S
+                    s_vec = c_sums / total_sum         # Row vector S
+                    pc = r_sums @ s_vec                  # Outer product
+                else:
+                    # If total sum is 0, approximation is a zero matrix of the same shape
+                    logger.warning(
+                        "OTA Task (%s): Total sum of preconditioner is 0 for model %s. Using zero matrix for approximation.",
+                        self.weight_info.name,
+                        model,
+                    )
+                    pc = torch.zeros_like(pc)
+            except Exception as e:
+                logger.warning(
+                    "OTA Task (%s): Rank-1 approximation failed for model %s with error: %s. Proceeding with full preconditioner.",
+                    self.weight_info.name,
+                    model,
+                    e,
+                )
+        elif rank and pc.ndim == 2 and not getattr(self.weight_info, "is_embed", False):
+            logger.info(
+                "OTA Task (%s): Applying SVD with rank=%s for model %s",
                 self.weight_info.name,
                 rank,
                 model,
             )
             try:
                 rank_int = int(rank)
-                U, S, V = torch.svd_lowrank(pc, q=rank_int)
-                pc = U @ torch.diag(S) @ V.mH
+                U, S, Vh = torch.linalg.svd(pc, full_matrices=False)
+                
+                # Truncate to rank r
+                U_r = U[:, :rank_int]
+                S_r = S[:rank_int]
+                Vh_r = Vh[:rank_int, :]
+                
+                # Reconstruct and ensure non-negativity
+                pc = U_r @ torch.diag(S_r) @ Vh_r
+                pc = torch.relu(pc)
+
             except Exception as e:
                 logger.warning(
                     "OTA Task (%s): SVD approximation failed for model %s with error: %s. Proceeding with full preconditioner.",
@@ -611,6 +649,7 @@ class OTAMerge(MergeMethod):
             ConfigParameterDef(name="preconditioner_path", required=True),
             ConfigParameterDef(name="scaling_factor", required=False, default_value=1.0, description="Optional multiplicative factor applied to this model's preconditioner to allow intensity normalisation across models."),
             ConfigParameterDef(name="rank", required=False, default_value=None, description="If specified, use a rank-r SVD approximation of the preconditioner. Only applied to 2D tensors that are not embedding layers."),
+            ConfigParameterDef(name="rank1_approx", required=False, default_value=False, description="Use a rank-1 approximation based on row and column sums instead of SVD."),
         ]
 
     # ---- Task creation ----

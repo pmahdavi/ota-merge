@@ -140,6 +140,9 @@ def generate_merge_name(config_file):
             if 'models' in config and isinstance(config['models'], list):
                 for model_entry in config['models']:
                     model_params = model_entry.get('parameters', {})
+                    if model_params.get('rank1_approx'):
+                        h_params.append("rank1lemma")
+                        break
                     rank = model_params.get('rank')
                     if rank is not None:
                         h_params.append(f"rank{rank}")
@@ -291,6 +294,7 @@ def main():
                         help='Memory for the job (default: 80g)')
     parser.add_argument('--job_name', default='mergekit',
                         help='Name of the job for PBS (default: mergekit)')
+    parser.add_argument('--run_name_prefix', type=str, default='', help='Optional prefix for the generated run name.')
     parser.add_argument('--keep_temp_files', action='store_true',
                         help='Keep temporary files after job submission')
     parser.add_argument('--no_allow_crimes', action='store_true',
@@ -313,6 +317,10 @@ def main():
     
     # Generate the merge name
     merge_name = generate_merge_name(args.config_file)
+    
+    # Add prefix to merge name if provided
+    if args.run_name_prefix:
+        merge_name = f"{args.run_name_prefix}_{merge_name}"
     
     # Create the full output directory path
     output_dir = os.path.join(args.output_dir, merge_name)

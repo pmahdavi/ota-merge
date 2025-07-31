@@ -11,16 +11,13 @@ parameters:
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
-      preconditioner_path: pmahdavi/Llama-3.1-8B-math-reasoning/export/exp_avg_sq.safetensors
-      rank: 4
+      preconditioner_path: pmahdavi/Llama-3.1-8B-math-reasoning/export/fisher_diag_s1024_bs128.safetensors
   - model: pmahdavi/Llama-3.1-8B-coding
     parameters:
-      preconditioner_path: pmahdavi/Llama-3.1-8B-coding/export/exp_avg_sq.safetensors
-      rank: 4
+      preconditioner_path: pmahdavi/Llama-3.1-8B-coding/export/fisher_diag_s1024_bs128.safetensors
   - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
-      preconditioner_path: pmahdavi/Llama-3.1-8B-precise-if/export/exp_avg_sq.safetensors
-      rank: 4
+      preconditioner_path: pmahdavi/Llama-3.1-8B-precise-if/export/fisher_diag_s1024_bs128.safetensors
 
 dtype: bfloat16
 tokenizer_source: union 
