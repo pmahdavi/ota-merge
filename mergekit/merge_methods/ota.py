@@ -130,10 +130,16 @@ class OTAMergeTask(Task[torch.Tensor]):
     base_model_ref: Optional[ModelReference] = None
     fallback_to_base: bool = False
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
+    _is_thresholding_active: bool = PrivateAttr(default=False)
 
     def model_post_init(self, __context: Any) -> None:
         """Initialize the preconditioner loader after the model is validated."""
         self._preconditioner_loader = PreconditionerLoader(self.weight_info)
+        global_thresh = self.precond_threshold is not None
+        model_thresh = any(
+            p.get("precond_threshold") is not None for p in self.tensor_parameters.values()
+        )
+        self._is_thresholding_active = global_thresh or model_thresh
 
     # ---------------- Task boiler‑plate ----------------
 
@@ -190,10 +196,13 @@ class OTAMergeTask(Task[torch.Tensor]):
         base_tensor: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
         """Apply a threshold to the preconditioner and return a mask."""
-        if self.precond_threshold is None:
+        model_params = self.tensor_parameters.get(model, {})
+        threshold_val = model_params.get("precond_threshold", self.precond_threshold)
+
+        if threshold_val is None:
             return None
 
-        threshold = float(self.precond_threshold)
+        threshold = float(threshold_val)
         log_message = ""
 
         if (
@@ -380,7 +389,7 @@ class OTAMergeTask(Task[torch.Tensor]):
         # making this division safe.
         merged_tensor = numerator / denominator
 
-        if self.precond_threshold is None:
+        if not self._is_thresholding_active:
             return merged_tensor
 
         # Fallback logic for elements where all models were masked by the threshold
@@ -408,12 +417,11 @@ class OTAMergeTask(Task[torch.Tensor]):
                 log_message = "Falling back to simple average for these elements."
 
             logger.warning(
-                "OTA Task (%s): %d/%d elements (%.2f%%) have all models masked due to precond_threshold=%.1e. %s",
+                "OTA Task (%s): %d/%d elements (%.2f%%) have all models masked due to precond_threshold settings. %s",
                 self.weight_info.name,
                 n_masked_elements,
                 total_elements,
                 percentage,
-                self.precond_threshold,
                 log_message,
             )
 
@@ -647,6 +655,12 @@ class OTAMerge(MergeMethod):
         # `preconditioner_path` is required.
         return [
             ConfigParameterDef(name="preconditioner_path", required=True),
+            ConfigParameterDef(
+                name="precond_threshold",
+                required=False,
+                default_value=None,
+                description="Element-wise threshold for this model's preconditioner values. Overrides the global setting.",
+            ),
             ConfigParameterDef(name="scaling_factor", required=False, default_value=1.0, description="Optional multiplicative factor applied to this model's preconditioner to allow intensity normalisation across models."),
             ConfigParameterDef(name="rank", required=False, default_value=None, description="If specified, use a rank-r SVD approximation of the preconditioner. Only applied to 2D tensors that are not embedding layers."),
             ConfigParameterDef(name="rank1_approx", required=False, default_value=False, description="Use a rank-1 approximation based on row and column sums instead of SVD."),

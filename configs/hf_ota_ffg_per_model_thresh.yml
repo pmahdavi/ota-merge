@@ -5,25 +5,29 @@ parameters:
   epsilon: 1e-24 # Default epsilon for OTA, can be tuned
   normalise: none
   power: 0.5
-  precond_threshold: 1e-20  # Mask elements where precond < threshold
   fallback_to_base: true
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-math-reasoning/export/exp_avg_sq.safetensors
+      precond_threshold: 3.605e-21
   - model: pmahdavi/Llama-3.1-8B-coding
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-coding/export/exp_avg_sq.safetensors
+      precond_threshold: 2.1223e-21
   - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-precise-if/export/exp_avg_sq.safetensors
+      precond_threshold: 5.055e-22
   - model: pmahdavi/Llama-3.1-8B-general
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-general/export/exp_avg_sq.safetensors
+      precond_threshold: 4.3573e-21
   - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-knowledge-recall/export/exp_avg_sq.safetensors
+      precond_threshold: 8.5224e-22
 
 dtype: bfloat16
 tokenizer_source: union 

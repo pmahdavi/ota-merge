@@ -1,7 +1,7 @@
 merge_method: ties
 base_model: meta-llama/Meta-Llama-3.1-8B
 parameters:
-  density: 1.0 # Default density for TIES, can be tuned
+  density: 0.65 # Default density for TIES, can be tuned
   weight: 1.0    # Equal weighting for all models before TIES processing
 
 models:
@@ -12,6 +12,12 @@ models:
     parameters:
       weight: 1.0
   - model: pmahdavi/Llama-3.1-8B-precise-if
+    parameters:
+      weight: 1.0
+  - model: pmahdavi/Llama-3.1-8B-general
+    parameters:
+      weight: 1.0
+  - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       weight: 1.0
 

@@ -130,11 +130,33 @@ def generate_merge_name(config_file):
         
         # OTA-specific hyperparameters
         if 'ota' in merge_method:
+            fallback_to_base = config_params.get('fallback_to_base')
+            if fallback_to_base:
+                h_params.append("fb")
+
             power = config_params.get('power')
             if power is not None: h_params.append(f"pow{power}")
             
-            threshold = config_params.get('precond_threshold')
-            if threshold is not None: h_params.append(f"precond-thresh{float(threshold):.0e}")
+            # --- Preconditioner Threshold ---
+            global_threshold = config_params.get('precond_threshold')
+            if global_threshold is not None:
+                h_params.append(f"precond-thresh{float(global_threshold):.0e}")
+            else:
+                # Check for per-model thresholds if no global one is set
+                model_thresholds = set()
+                if 'models' in config and isinstance(config['models'], list):
+                    for model_entry in config['models']:
+                        model_params = model_entry.get('parameters', {})
+                        model_thresh = model_params.get('precond_threshold')
+                        if model_thresh is not None:
+                            model_thresholds.add(float(model_thresh))
+                
+                if len(model_thresholds) == 1:
+                    # All models use the same threshold
+                    h_params.append(f"precond-thresh{model_thresholds.pop():.0e}")
+                elif len(model_thresholds) > 1:
+                    # Different thresholds are used
+                    h_params.append("precond-thresh-multi")
 
             # Check for rank in per-model parameters
             if 'models' in config and isinstance(config['models'], list):

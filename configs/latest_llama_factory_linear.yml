@@ -1,19 +1,19 @@
 merge_method: linear
 
 models:
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_coding_full_ebs128_lr5e-06/checkpoint-1111
+  - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
       weight: 1.0
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_general_full_ebs128_lr5e-06/checkpoint-912
+  - model: pmahdavi/Llama-3.1-8B-coding
     parameters:
       weight: 1.0
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_knowledge_recall_full_ebs128_lr5e-06/checkpoint-820
+  - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
       weight: 1.0
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_math_reasoning_full_ebs128_lr5e-06/checkpoint-2611
+  - model: pmahdavi/Llama-3.1-8B-general
     parameters:
       weight: 1.0
-  - model: /scratch/pxm5426/runs/lora-exploration/llama-factory/Llama-3.1-8B_tulu3_mixture_precise_if_full_ebs128_lr1e-05/checkpoint-234
+  - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       weight: 1.0
 
