@@ -31,7 +31,10 @@ def create_pbs_script(config_file, merge_method, output_dir, walltime, ngpus, nc
         options += " --allow-crimes"
     if trust_remote_code:
         options += " --trust-remote-code"
-    
+
+    # Add verbose flag to get detailed logs
+    options += " -v"
+
     pbs_script = f"""#!/bin/tcsh
 #PBS -l ngpus={ngpus}
 #PBS -l ncpus={ncpus}
@@ -134,8 +137,20 @@ def generate_merge_name(config_file):
             if fallback_to_base:
                 h_params.append("fb")
 
+            rescale = config_params.get('rescale')
+            if rescale:
+                approximate_norm = config_params.get('approximate_norm')
+                if approximate_norm:
+                    h_params.append("approx-rescale")
+                else:
+                    h_params.append("rescale")
+
             power = config_params.get('power')
             if power is not None: h_params.append(f"pow{power}")
+
+            rescale_relative_thresh = config_params.get('rescale_relative_threshold')
+            if rescale_relative_thresh is not None and rescale:
+                h_params.append(f"rescale-rel-thresh{float(rescale_relative_thresh):.0e}")
             
             # --- Preconditioner Threshold ---
             global_threshold = config_params.get('precond_threshold')

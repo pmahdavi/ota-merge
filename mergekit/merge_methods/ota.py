@@ -71,6 +71,7 @@ from functools import lru_cache
 
 import safetensors
 import torch
+import numpy as np
 from pydantic import PrivateAttr
 from typing_extensions import override
 from huggingface_hub import hf_hub_download, HfApi
@@ -87,6 +88,80 @@ from mergekit.merge_methods.rectify_embed import rectify_embed_sizes
 from mergekit.options import MergeOptions
 
 logger = logging.getLogger(__name__)
+
+
+def _approximate_spectral_norm(W: torch.Tensor, num_iterations: int = 10) -> torch.Tensor:
+    """Approximates the spectral norm of a 2D tensor using power iteration."""
+    if W.ndim != 2:
+        raise ValueError("Input tensor must be 2D.")
+    d_out, d_in = W.shape
+    if d_in == 0 or d_out == 0:
+        return torch.tensor(0.0, device=W.device)
+
+    v = torch.randn(d_in, device=W.device, dtype=W.dtype)
+    v = v / torch.linalg.norm(v)
+
+    with torch.no_grad():
+        for _ in range(num_iterations):
+            # Power iteration for W.T @ W
+            v = W.T @ (W @ v)
+            v_norm = torch.linalg.norm(v)
+            if v_norm == 0:
+                return torch.tensor(0.0, device=W.device)
+            v = v / v_norm
+
+    # The largest singular value is the L2 norm of W @ v
+    spectral_norm = torch.linalg.norm(W @ v)
+    return spectral_norm
+
+
+def rms_to_rms_operator_norm(
+    W: torch.Tensor, approximate: bool = False
+) -> torch.Tensor:
+    """Calculates the RMS to RMS operator norm for a 2D weight tensor."""
+    if W.ndim != 2:
+        return torch.tensor(float("nan"), device=W.device)
+    d_out, d_in = W.shape
+    if d_out == 0:
+        return torch.tensor(0.0, device=W.device)
+
+    if approximate:
+        spectral_norm = _approximate_spectral_norm(W)
+    else:
+        spectral_norm = torch.linalg.norm(W, ord=2)
+    return torch.sqrt(torch.tensor(d_in / d_out, device=W.device)) * spectral_norm
+
+
+def l1_to_rms_operator_norm(W: torch.Tensor) -> torch.Tensor:
+    """Calculates the l1 to RMS operator norm for a 2D weight tensor."""
+    if W.ndim != 2:
+        return torch.tensor(float("nan"), device=W.device)
+    d_out, _ = W.shape
+    if d_out == 0:
+        return torch.tensor(0.0, device=W.device)
+    l1_to_l2_norm = torch.linalg.norm(W, ord=2, dim=0).max()
+    return (1 / torch.sqrt(torch.tensor(d_out, device=W.device))) * l1_to_l2_norm
+
+
+def _calculate_hybrid_norm(
+    tensor: torch.Tensor, weight_info: WeightInfo, approximate: bool = False
+) -> float:
+    """Calculates the hybrid norm for a tensor based on its name and dimensions."""
+    if tensor.numel() == 0:
+        return 0.0
+
+    # Ensure tensor is float32 for norm calculations
+    tensor_float32 = tensor.to(torch.float32)
+    hybrid_norm = float("nan")
+
+    if weight_info.name in ["lm_head.weight", "model.embed_tokens.weight"]:
+        hybrid_norm = l1_to_rms_operator_norm(tensor_float32).item()
+    elif tensor.ndim >= 2:
+        hybrid_norm = rms_to_rms_operator_norm(tensor_float32, approximate=approximate).item()
+    elif tensor.ndim == 1:
+        hybrid_norm = torch.sqrt(torch.mean(tensor_float32.pow(2))).item()
+
+    return hybrid_norm
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +204,9 @@ class OTAMergeTask(Task[torch.Tensor]):
     precond_threshold: Optional[float] = None
     base_model_ref: Optional[ModelReference] = None
     fallback_to_base: bool = False
+    rescale: bool = False
+    approximate_norm: bool = False
+    rescale_relative_threshold: float = 1e-6
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
     _is_thresholding_active: bool = PrivateAttr(default=False)
 
@@ -269,8 +347,8 @@ class OTAMergeTask(Task[torch.Tensor]):
         tensor: torch.Tensor,
         device: torch.device,
         base_tensor: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Calculate the weighting tensor for a single model in fp32."""
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Calculate the weighting tensor for a single model in fp32 and return the mask."""
         pc = self._get_and_load_preconditioner(model, tensor, device)  # returns fp32
 
         # --- SVD approximation logic ---
@@ -348,46 +426,124 @@ class OTAMergeTask(Task[torch.Tensor]):
             # mask is boolean, multiplication promotes it to float32
             weight_tensor = weight_tensor * mask
 
-        return weight_tensor  # Already fp32, .float() is redundant
+        return weight_tensor, mask  # Return mask for potential rescaling
 
     def _compute_weighting_tensors(
         self,
         models: List[ModelReference],
         stacked_tensors: torch.Tensor,
         base_tensor: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Compute element-wise weighting tensors for all models."""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute element-wise weighting tensors and masks for all models."""
         logger.info(
             "OTA Task (%s): Normalisation mode set to '%s'.",
             self.weight_info.name,
             self.normalise_mode,
         )
 
-        weight_tensors = [
-            self._calculate_single_weight_tensor(
+        weight_tensors = []
+        masks = []
+        for i, m in enumerate(models):
+            specialist_tensor = stacked_tensors[i]
+            weight_tensor, mask = self._calculate_single_weight_tensor(
                 model=m,
-                tensor=stacked_tensors[i],
+                tensor=specialist_tensor,
                 device=stacked_tensors.device,
                 base_tensor=base_tensor,
             )
-            for i, m in enumerate(models)
-        ]
+            weight_tensors.append(weight_tensor)
 
-        return torch.stack(weight_tensors, dim=0)
+            if mask is None:
+                # If no thresholding is active, no elements are masked.
+                mask = torch.ones_like(
+                    weight_tensor, dtype=torch.bool, device=weight_tensor.device
+                )
+            masks.append(mask)
+
+        return torch.stack(weight_tensors, dim=0), torch.stack(masks, dim=0)
 
     def _perform_weighted_merge(
         self,
         stacked_tensors: torch.Tensor,
         weights_stack: torch.Tensor,
+        masks_stack: torch.Tensor,
+        models: List[ModelReference],
         base_tensor: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Perform the element-wise weighted merge with a fallback for fully masked elements."""
-        numerator = (weights_stack * stacked_tensors).sum(dim=0)
-        denominator = weights_stack.sum(dim=0)
+        # --- Task Vector Logic ---
+        if base_tensor is not None:
+            # Convert to task vectors relative to the base model
+            task_vectors = stacked_tensors.to(torch.float32) - base_tensor.to(
+                torch.float32
+            )
+
+            # --- Rescale Logic ---
+            if self.rescale:
+                for i, m in enumerate(models):
+                    task_vector = task_vectors[i]
+                    mask = masks_stack[i]
+                    original_norm = _calculate_hybrid_norm(
+                        task_vector, self.weight_info, approximate=self.approximate_norm
+                    )
+
+                    if original_norm is not None and not np.isnan(original_norm):
+                        masked_task_vector = task_vector * mask
+                        masked_norm = _calculate_hybrid_norm(
+                            masked_task_vector,
+                            self.weight_info,
+                            approximate=self.approximate_norm,
+                        )
+
+                        if (
+                            masked_norm is not None
+                            and not np.isnan(masked_norm)
+                            and masked_norm
+                            > (original_norm * self.rescale_relative_threshold)
+                        ):
+                            scale = original_norm / masked_norm
+                            task_vectors[i] = masked_task_vector * scale
+                            logger.info(
+                                "OTA Task (%s): Model %s - Rescaled task vector norm from %.4e to %.4e (scale=%.4f)",
+                                self.weight_info.name,
+                                m,
+                                masked_norm,
+                                original_norm,
+                                scale,
+                            )
+                        else:
+                            # If masked norm is zero or below relative threshold, the rescaled vector is also zero.
+                            task_vectors[i] = torch.zeros_like(task_vector)
+                            logger.info(
+                                "OTA Task (%s): Model %s - Masked norm (%.4e) is below relative threshold (%.2e). Task vector zeroed.",
+                                self.weight_info.name,
+                                m,
+                                masked_norm if masked_norm is not None else float("nan"),
+                                (original_norm * self.rescale_relative_threshold),
+                            )
+                    else:
+                        # If original norm is NaN, cannot rescale.
+                        task_vectors[i] = task_vector * mask
+                        logger.warning(
+                            "OTA Task (%s): Model %s - Original norm is NaN. Cannot rescale, applying mask only.",
+                            self.weight_info.name,
+                            m,
+                        )
+
+            # The merge is now a weighted average of task vectors, added to the base
+            numerator = (weights_stack * task_vectors).sum(dim=0)
+            denominator = weights_stack.sum(dim=0)
+            avg_task_vector = numerator / denominator
+            merged_tensor = base_tensor.to(torch.float32) + avg_task_vector
+
+        else:
+            # --- Standard Weighted Merge (No Base Model) ---
+            numerator = (weights_stack * stacked_tensors).sum(dim=0)
+            denominator = weights_stack.sum(dim=0)
+            merged_tensor = numerator / denominator
 
         # The denominator should not be zero due to the added epsilon,
         # making this division safe.
-        merged_tensor = numerator / denominator
 
         if not self._is_thresholding_active:
             return merged_tensor
@@ -446,9 +602,16 @@ class OTAMergeTask(Task[torch.Tensor]):
                 )
             base_tensor = tensors[self.base_model_ref]
             models_to_merge = [m for m in tensors if m != self.base_model_ref]
+            if self.rescale:
+                logger.info("OTA Task (%s): Rescale enabled.", self.weight_info.name)
         else:
             base_tensor = None
             models_to_merge = list(tensors.keys())
+            if self.rescale:
+                logger.warning(
+                    "OTA Task (%s): 'rescale' is enabled but no 'base_model' is provided. The rescale feature will have no effect.",
+                    self.weight_info.name,
+                )
 
         tensor_list = [tensors[m] for m in models_to_merge]
 
@@ -466,11 +629,13 @@ class OTAMergeTask(Task[torch.Tensor]):
         original_dtype = tensor_list[0].dtype
 
         stacked_tensors = self._prepare_and_stack_tensors(tensor_list)
-        weights_stack = self._compute_weighting_tensors(
+        weights_stack, masks_stack = self._compute_weighting_tensors(
             models_to_merge, stacked_tensors, base_tensor
         )
 
-        merged = self._perform_weighted_merge(stacked_tensors, weights_stack, base_tensor)
+        merged = self._perform_weighted_merge(
+            stacked_tensors, weights_stack, masks_stack, models_to_merge, base_tensor
+        )
 
         merged_stats = merged.float()
         logger.info(
@@ -649,6 +814,24 @@ class OTAMerge(MergeMethod):
                 default_value=False,
                 description="If true, fully masked elements will revert to the base model's value instead of a simple average.",
             ),
+            ConfigParameterDef(
+                name="rescale",
+                required=False,
+                default_value=False,
+                description="If true, the masked task vector for each model is rescaled to preserve its original hybrid norm before merging.",
+            ),
+            ConfigParameterDef(
+                name="approximate_norm",
+                required=False,
+                default_value=False,
+                description="If true, use power iteration to approximate the spectral norm for faster computation.",
+            ),
+            ConfigParameterDef(
+                name="rescale_relative_threshold",
+                required=False,
+                default_value=1e-6,
+                description="Relative threshold for rescaling. Masked norm must be > (original_norm * this_value) to be rescaled.",
+            ),
         ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
@@ -689,5 +872,10 @@ class OTAMerge(MergeMethod):
             precond_threshold=parameters.get("precond_threshold"),
             base_model_ref=base_model,
             fallback_to_base=parameters.get("fallback_to_base", False),
+            rescale=parameters.get("rescale", False),
+            approximate_norm=parameters.get("approximate_norm", False),
+            rescale_relative_threshold=parameters.get(
+                "rescale_relative_threshold", 1e-6
+            ),
         )
         return task 
