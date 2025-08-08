@@ -152,6 +152,11 @@ def generate_merge_name(config_file):
             if rescale_relative_thresh is not None and rescale:
                 h_params.append(f"rescale-rel-thresh{float(rescale_relative_thresh):.0e}")
             
+            # Add masked_task_vector_merge_method to name
+            masked_merge_method = config_params.get('masked_task_vector_merge_method')
+            if masked_merge_method == 'linear':
+                h_params.append("linear-task-merge")
+
             # --- Preconditioner Threshold ---
             global_threshold = config_params.get('precond_threshold')
             if global_threshold is not None:

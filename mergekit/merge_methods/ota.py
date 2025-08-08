@@ -207,6 +207,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     rescale: bool = False
     approximate_norm: bool = False
     rescale_relative_threshold: float = 1e-6
+    masked_task_vector_merge_method: str = "precond"
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
     _is_thresholding_active: bool = PrivateAttr(default=False)
 
@@ -531,9 +532,22 @@ class OTAMergeTask(Task[torch.Tensor]):
                         )
 
             # The merge is now a weighted average of task vectors, added to the base
-            numerator = (weights_stack * task_vectors).sum(dim=0)
             denominator = weights_stack.sum(dim=0)
-            avg_task_vector = numerator / denominator
+            if self.masked_task_vector_merge_method == "linear":
+                # Simple linear average of the (potentially rescaled) masked task vectors
+                avg_task_vector = task_vectors.mean(dim=0)
+                log_message = "using linear merge"
+            else:
+                # Default: Preconditioner-weighted merge
+                numerator = (weights_stack * task_vectors).sum(dim=0)
+                avg_task_vector = numerator / denominator
+                log_message = "using precond-weighted merge"
+
+            logger.info(
+                "OTA Task (%s): Merging task vectors %s.",
+                self.weight_info.name,
+                log_message,
+            )
             merged_tensor = base_tensor.to(torch.float32) + avg_task_vector
 
         else:
@@ -832,6 +846,12 @@ class OTAMerge(MergeMethod):
                 default_value=1e-6,
                 description="Relative threshold for rescaling. Masked norm must be > (original_norm * this_value) to be rescaled.",
             ),
+            ConfigParameterDef(
+                name="masked_task_vector_merge_method",
+                required=False,
+                default_value="precond",
+                description="When a base model is provided, how to merge the masked task vectors. Options: 'precond' (default, weighted by preconditioner) or 'linear' (simple average).",
+            ),
         ]
 
     def tensor_parameters(self) -> List[ConfigParameterDef]:
@@ -876,6 +896,9 @@ class OTAMerge(MergeMethod):
             approximate_norm=parameters.get("approximate_norm", False),
             rescale_relative_threshold=parameters.get(
                 "rescale_relative_threshold", 1e-6
+            ),
+            masked_task_vector_merge_method=parameters.get(
+                "masked_task_vector_merge_method", "precond"
             ),
         )
         return task 
