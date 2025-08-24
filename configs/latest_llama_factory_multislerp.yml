@@ -1,5 +1,5 @@
-merge_method: linear
-
+merge_method: multislerp
+# base_model: meta-llama/Meta-Llama-3.1-8B
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
@@ -16,6 +16,5 @@ models:
   - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       weight: 1.0
-
 dtype: bfloat16
 tokenizer_source: union 

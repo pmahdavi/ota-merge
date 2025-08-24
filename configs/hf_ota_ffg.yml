@@ -1,12 +1,12 @@
 merge_method: ota
-base_model: meta-llama/Meta-Llama-3.1-8B
+# base_model: meta-llama/Meta-Llama-3.1-8B
 
 parameters:
   epsilon: 1e-24 # Default epsilon for OTA, can be tuned
   normalise: none
-  power: 0.5
-  precond_threshold: 1e-20  # Mask elements where precond < threshold
-  fallback_to_base: true
+  power: 1.0
+  # precond_threshold: 1e-20  # Mask elements where precond < threshold
+  # fallback_to_base: true
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning

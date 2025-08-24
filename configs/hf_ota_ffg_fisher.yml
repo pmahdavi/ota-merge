@@ -1,12 +1,10 @@
 merge_method: ota
-base_model: meta-llama/Meta-Llama-3.1-8B
 
 parameters:
   epsilon: 1e-24 # Default epsilon for OTA, can be tuned
   normalise: none
-  power: 0.5
-  precond_threshold: 1e-20  # Mask elements where (v * (w_t - w_0)^2) < threshold
-  fallback_to_base: true # Fallback to base model for fully masked elements
+  power: 1.0
+  fallback_to_base: false # Fallback to base model for fully masked elements
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
@@ -18,6 +16,12 @@ models:
   - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-precise-if/export/fisher_diag_s1024_bs128.safetensors
+  - model: pmahdavi/Llama-3.1-8B-general
+    parameters:
+      preconditioner_path: pmahdavi/Llama-3.1-8B-general/export/fisher_diag_s1024_bs128.safetensors
+  - model: pmahdavi/Llama-3.1-8B-knowledge-recall
+    parameters:
+      preconditioner_path: pmahdavi/Llama-3.1-8B-knowledge-recall/export/fisher_diag_s1024_bs128.safetensors
 
 dtype: bfloat16
 tokenizer_source: union 

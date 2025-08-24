@@ -32,7 +32,7 @@ echo "Device PyTorch will use: `python -c 'import torch; print(torch.device("cud
 
 # Command to execute the visualization script
 echo "Running OTA visualization script..."
-# python visualize_ota_stddev.py /scratch/pxm5426/runs/lora-exploration/merged_models/ota_normglobal_eps1e-8_pow0.5/ota_detailed_tensor_logs
-python scripts/merge_analyzer.py --output analysis_results.xlsx configs/hf_ota_ffg.yml
+python visualize_ota_stddev.py /scratch/pxm5426/runs/lora-exploration/merged_models/ota_normglobal_eps1e-8_pow0.5/ota_detailed_tensor_logs
+# python scripts/merge_analyzer.py --output analysis_results.xlsx configs/hf_ota_ffg.yml
 
 echo "Job finished." 
