@@ -2,35 +2,34 @@ merge_method: ota
 base_model: meta-llama/Meta-Llama-3.1-8B
 
 parameters:
-  epsilon: 1e-24 # Default epsilon for OTA, can be tuned
+  epsilon: 1e-26 # Default epsilon for OTA, can be tuned
   normalise: none
   power: 0.5
   fallback_to_base: true
-  rescale: true
-  approximate_norm: false
-  rescale_relative_threshold: 1e-6
+  rescale: false
+  # masked_task_vector_merge_method: linear
 
 models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-math-reasoning/export/exp_avg_sq.safetensors
-      precond_threshold: 1.4125e-19
-  - model: pmahdavi/Llama-3.1-8B-coding
+      precond_threshold:  2.626e-19
+  - model: pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4
     parameters:
-      preconditioner_path: pmahdavi/Llama-3.1-8B-coding/export/exp_avg_sq.safetensors
-      precond_threshold: 1.7967e-19
+      preconditioner_path: pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4/export_full_state_checkpoint-1100/exp_avg_sq.safetensors
+      precond_threshold: 1.1152e-18
   - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-precise-if/export/exp_avg_sq.safetensors
-      precond_threshold: 5.2293e-20
+      precond_threshold: 5.8823e-21
   - model: pmahdavi/Llama-3.1-8B-general
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-general/export/exp_avg_sq.safetensors
-      precond_threshold: 1.7067e-19
+      precond_threshold: 5.53727472e-19
   - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       preconditioner_path: pmahdavi/Llama-3.1-8B-knowledge-recall/export/exp_avg_sq.safetensors
-      precond_threshold: 1.5399e-19
+      precond_threshold: 5.56821541e-19
 
 dtype: bfloat16
 tokenizer_source: union 

@@ -8,18 +8,23 @@ models:
   - model: pmahdavi/Llama-3.1-8B-math-reasoning
     parameters:
       weight: 1.0
+      density: 0.4563856456
   - model: pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4
     parameters:
       weight: 1.0
+      density: 0.20485687
   - model: pmahdavi/Llama-3.1-8B-precise-if
     parameters:
       weight: 1.0
+      density: 0.41
   - model: pmahdavi/Llama-3.1-8B-general
     parameters:
       weight: 1.0
+      density: 0.3251126
   - model: pmahdavi/Llama-3.1-8B-knowledge-recall
     parameters:
       weight: 1.0
+      density: 0.29882365
 
 dtype: bfloat16
 tokenizer_source: union 

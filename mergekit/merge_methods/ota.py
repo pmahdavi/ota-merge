@@ -208,6 +208,7 @@ class OTAMergeTask(Task[torch.Tensor]):
     approximate_norm: bool = False
     rescale_relative_threshold: float = 1e-6
     masked_task_vector_merge_method: str = "precond"
+    ties_density: Optional[float] = None
     _preconditioner_loader: "PreconditionerLoader" = PrivateAttr()
     _is_thresholding_active: bool = PrivateAttr(default=False)
 
@@ -537,6 +538,48 @@ class OTAMergeTask(Task[torch.Tensor]):
                 # Simple linear average of the (potentially rescaled) masked task vectors
                 avg_task_vector = task_vectors.mean(dim=0)
                 log_message = "using linear merge"
+            elif self.masked_task_vector_merge_method == "ties":
+                log_message = "using ties merge"
+
+                # 1. Trim (optional) based on ties_density
+                if self.ties_density is not None and self.ties_density < 1.0:
+                    logger.info(
+                        "OTA Task (%s): Applying TIES trimming with density=%.4f",
+                        self.weight_info.name,
+                        self.ties_density,
+                    )
+                    trimmed_task_vectors = []
+                    for i in range(task_vectors.shape[0]):
+                        task_vector = task_vectors[i]
+                        num_elements_to_keep = int(
+                            self.ties_density * task_vector.numel()
+                        )
+                        if num_elements_to_keep == 0:
+                            trimmed_task_vectors.append(torch.zeros_like(task_vector))
+                            continue
+
+                        top_k_vals, _ = torch.topk(
+                            torch.abs(task_vector).view(-1), num_elements_to_keep
+                        )
+                        threshold = top_k_vals[-1]
+                        mask = torch.abs(task_vector) >= threshold
+                        trimmed_task_vectors.append(task_vector * mask)
+                    task_vectors = torch.stack(trimmed_task_vectors, dim=0)
+
+                # 2. Elect-Sign
+                signs = torch.sign(task_vectors)
+                # Determine majority sign based on the sum of task vector values, not just signs
+                summed_values = task_vectors.sum(dim=0)
+                final_sign = torch.sign(summed_values)
+                final_sign[final_sign == 0] = 1 # Default to positive for ties where sum is 0
+
+                # Zero out parameters that don't agree with the final sign
+                # Use in-place multiplication to avoid allocating a large new tensor
+                agreement_mask = signs == final_sign.unsqueeze(0)
+                task_vectors *= agreement_mask
+
+                # 3. Dis-entangle (Merge)
+                avg_task_vector = task_vectors.mean(dim=0)
             else:
                 # Default: Preconditioner-weighted merge
                 numerator = (weights_stack * task_vectors).sum(dim=0)
@@ -850,7 +893,13 @@ class OTAMerge(MergeMethod):
                 name="masked_task_vector_merge_method",
                 required=False,
                 default_value="precond",
-                description="When a base model is provided, how to merge the masked task vectors. Options: 'precond' (default, weighted by preconditioner) or 'linear' (simple average).",
+                description="When a base model is provided, how to merge the masked task vectors. Options: 'precond' (default, weighted by preconditioner), 'linear' (simple average), or 'ties' (TIES-merging).",
+            ),
+            ConfigParameterDef(
+                name="ties_density",
+                required=False,
+                default_value=None,
+                description="For 'ties' merging, the fraction of weights to preserve in each task vector (trimming). E.g., 0.1 for top 10%. If not set, all weights are kept.",
             ),
         ]
 
@@ -900,5 +949,6 @@ class OTAMerge(MergeMethod):
             masked_task_vector_merge_method=parameters.get(
                 "masked_task_vector_merge_method", "precond"
             ),
+            ties_density=parameters.get("ties_density"),
         )
         return task 
