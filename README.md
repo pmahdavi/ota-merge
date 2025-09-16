@@ -1,403 +1,296 @@
-# mergekit
+# OTA-Merge: Curvature-Informed Model Merging
 
-`mergekit` is a toolkit for merging pre-trained language models. `mergekit` uses an out-of-core approach to perform unreasonably elaborate merges in resource-constrained situations. Merges can be run entirely on CPU or accelerated with as little as 8 GB of VRAM. Many merging algorithms are supported, with more coming as they catch my attention.
+This repository implements **OTA (Optimization Trajectory Aware) Merging**, a novel model merging method that leverages optimization dynamics for curvature-informed merging of fine-tuned language models. Built on top of [arcee-ai/mergekit](https://github.com/arcee-ai/mergekit), OTA introduces Fast Fisher Grafting (FFG) and curvature-aware aggregation using optimizer second-moment statistics.
 
-## Contents
-- [Why Merge Models?](#why-merge-models)
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Merge Configuration](#merge-configuration)
-  - [Parameter Specification](#parameter-specification)
-  - [Tokenizer Configuration](#tokenizer-configuration)
-  - [Chat Template Configuration](#chat-template-configuration)
-  - [Examples](#examples)
-- [Merge Methods](#merge-methods)
-- [LoRA extraction](#lora-extraction)
-- [Mixture of Experts merging](#mixture-of-experts-merging)
-- [Evolutionary merge methods](#evolutionary-merge-methods)
-- [Merge in the Cloud](#-merge-in-the-cloud-)
-- [Citation](#citation)
+> **Paper:** [Harnessing Optimization Dynamics for Curvature-Informed Model Merging](https://arxiv.org/abs/2509.11167)  
+> **Visualization Tools:** https://github.com/pmahdavi/surgeon.git
 
-## Why Merge Models?
+## Key Features
 
-Model merging is a powerful technique that allows combining the strengths of different models without the computational overhead of ensembling or the need for additional training. By operating directly in the weight space of models, merging can:
-
-- Combine multiple specialized models into a single versatile model
-- Transfer capabilities between models without access to training data
-- Find optimal trade-offs between different model behaviors
-- Improve performance while maintaining inference costs
-- Create new capabilities through creative model combinations
-
-Unlike traditional ensembling which requires running multiple models, merged models maintain the same inference cost as a single model while often achieving comparable or superior performance.
-
-## Features
-
-Key features of `mergekit` include:
-
-- Supports Llama, Mistral, GPT-NeoX, StableLM, and more
-- Many [merge methods](#merge-methods)
-- GPU or CPU execution
-- Lazy loading of tensors for low memory use
-- Interpolated gradients for parameter values (inspired by Gryphe's [BlockMerge_Gradient](https://github.com/Gryphe/BlockMerge_Gradient) script)
-- Piecewise assembly of language models from layers ("Frankenmerging")
-- [Mixture of Experts merging](#mixture-of-experts-merging)
-- [LORA extraction](#lora-extraction)
-- [Evolutionary merge methods](#evolutionary-merge-methods)
-
-🌐 GUI Launch Alert 🤗 - We are excited to announce the launch of a mega-GPU backed graphical user interface for mergekit in Arcee! This GUI simplifies the merging process, making it more accessible to a broader audience. Check it out and contribute at the [Arcee App](https://app.arcee.ai). There is also a [Hugging Face Space](https://huggingface.co/mergekit-community) with limited amounts of GPUs.
+- **Curvature-Aware Merging**: Uses Adam's second moments as Fisher information proxy for OTA
+- **Fast Fisher Grafting**: Task localization and interference mitigation (see [surgeon repo](https://github.com/pmahdavi/surgeon.git))
+- **Memory Efficiency**: Rank-1 approximation for second-moment compression
+- **Multiple Methods**: OTA, Linear, TIES, DARE, and Breadcrumbs implementations
+- **Production Ready**: Local execution and PBS cluster support
 
 ## Installation
 
-```sh
-git clone https://github.com/arcee-ai/mergekit.git
-cd mergekit
+```bash
+# Clone the repository
+git clone https://github.com/pmahdavi/ota-merge.git
+cd ota-merge
 
-pip install -e .  # install the package and make scripts available
+# Install in development mode
+pip install -e .
 ```
 
-If the above fails with the error of:
+## Quick Start
 
-```
-ERROR: File "setup.py" or "setup.cfg" not found. Directory cannot be installed in editable mode:
-(A "pyproject.toml" file was found, but editable mode currently requires a setuptools-based build.)
-```
+### Running Merges Locally
 
-You may need to upgrade pip to > 21.3 with the command `python3 -m pip install --upgrade pip`
+The primary entry point is `run_merge.py`, which provides a convenient wrapper around mergekit:
 
-## Usage
+```bash
+# Run OTA+FFG merge locally
+python run_merge.py configs/hf_ota_ffg_per_model_thresh.yml --local
 
-The script `mergekit-yaml` is the main entry point for `mergekit`. It takes a YAML configuration file and an output path, like so:
-
-```sh
-mergekit-yaml path/to/your/config.yml ./output-model-directory [--cuda] [--lazy-unpickle] [--allow-crimes] [... other options]
+# Run with custom output directory
+python run_merge.py configs/hf_ota_ffg_per_model_thresh.yml \
+    --output_dir ./my-merged-models --local
 ```
 
-This will run the merge and write your merged model to `./output-model-directory`.
+### PBS Cluster Execution
 
-For more information on the arguments accepted by `mergekit-yaml` run the command `mergekit-yaml --help`.
+For Penn State cluster users or similar PBS systems:
 
-### Uploading to Huggingface
+```bash
+# Submit to PBS queue
+python run_merge.py configs/hf_ota_ffg_per_model_thresh.yml
 
-When you have a merged model you're happy with, you may want to share it on the Hugging Face Hub. `mergekit` generates a `README.md` for your merge with some basic information for a model card. You can edit it to include more details about your merge, like giving it a good name or explaining what it's good at; rewrite it entirely; or use the generated `README.md` as-is. It is also possible to edit your `README.md` online once it has been uploaded to the Hub.
-
-Once you're happy with your model card and merged model, you can upload it to the Hugging Face Hub using the [huggingface_hub](https://huggingface.co/docs/huggingface_hub/index) Python library.
-
-```sh
-# log in to huggingface with an access token (must have write permission)
-huggingface-cli login
-# upload your model
-huggingface-cli upload your_hf_username/my-cool-model ./output-model-directory .
+# Customize PBS resources
+python run_merge.py configs/hf_ota_ffg_per_model_thresh.yml \
+    --walltime 24:00:00 --ngpus 4 --mem 120g
 ```
 
-The [documentation](https://huggingface.co/docs/huggingface_hub/guides/cli#huggingface-cli-upload) for `huggingface_hub` goes into more detail about other options for uploading.
+## Configuration Files
 
-## Merge Configuration
+All configurations are in the `configs/` directory. Key configurations used in our paper:
 
-Merge configurations are YAML documents specifying the operations to perform in order to produce your merged model.
-Below are the primary elements of a configuration file:
+| Method | Config File | Description |
+|--------|-------------|-------------|
+| **OTA+FFG** | `hf_ota_ffg_per_model_thresh.yml` | Main OTA results with per-model thresholds |
+| **OTA+FFG (Rank-1)** | `hf_ota_ffg_rank1lemma.yml` | Memory-efficient rank-1 approximation |
+| **OTA (w/ Linear)** | Enable `masked_task_vector_merge_method: linear` | Linear merge after FFG masking |
+| **OTA (w/o FFG)** | `hf_ota.yml` | Pure OTA without FFG denoising |
+| **DARE-TIES** | `latest_llama_factory_dare.yml` | DARE with TIES sign consensus |
+| **Linear** | `latest_llama_factory_linear.yml` | Simple weight averaging |
+| **TIES** | `latest_llama_factory_ties.yml` | TIES merging baseline |
+| **Breadcrumbs-TIES** | `latest_llama_factory_breadcrumbs_ties.yml` | Model breadcrumbs with TIES |
 
-- `merge_method`: Specifies the method to use for merging models. See [Merge Methods](#merge-methods) for a list.
-- `slices`: Defines slices of layers from different models to be used. This field is mutually exclusive with `models`.
-- `models`: Defines entire models to be used for merging. This field is mutually exclusive with `slices`.
-- `base_model`: Specifies the base model used in some merging methods.
-- `parameters`: Holds various parameters such as weights and densities, which can also be specified at different levels of the configuration.
-- `dtype`: Specifies the data type used for the merging operation.
-- `tokenizer` or `tokenizer_source`: Determines how to construct a tokenizer for the merged model.
-- `chat_template`: Specifies a chat template for the merged model.
+## Configuration Guide
 
-### Parameter Specification
+### Understanding YAML Configurations
 
-Parameters are flexible and can be set with varying precedence. They can be specified conditionally using tensor name filters, which allows finer control such as differentiating between attention heads and fully connected layers.
+All merge configurations follow a standard YAML format with these key sections:
+- `merge_method`: The merging algorithm to use (e.g., `ota`, `linear`, `ties`, `dare_ties`)
+- `base_model`: Reference model for task arithmetic methods (required for some methods)
+- `parameters`: Global parameters that apply to all models
+- `models`: List of models to merge with their individual parameters
+- `dtype`: Data type for computation (typically `bfloat16` or `float16`)
+- `tokenizer_source`: How to handle tokenizer (`union` combines all vocabularies)
 
-Parameters can be specified as:
+### OTA-Specific Configuration
 
-- **Scalars**: Single floating-point values.
-- **Gradients**: List of floating-point values, specifying an interpolated gradient.
-
-The parameters can be set at different levels, with decreasing precedence as follows:
-
-1. `slices.*.sources.parameters` - applying to a specific input slice
-2. `slices.*.parameters` - applying to a specific output slice
-3. `models.*.parameters` or `input_model_parameters` - applying to any tensors coming from specific input models
-4. `parameters` - catchall
-
-### Tokenizer Configuration
-
-The tokenizer behavior can be configured in two ways: using the new `tokenizer` field (recommended) or the legacy `tokenizer_source` field (maintained for backward compatibility). These fields are mutually exclusive - you should use one or the other, not both.
-
-#### Modern Configuration (tokenizer)
-
-The `tokenizer` field provides fine-grained control over vocabulary and embeddings:
+OTA introduces several unique parameters for curvature-aware merging:
 
 ```yaml
-tokenizer:
-  source: "union"  # or "base" or a specific model path
-  tokens:          # Optional: configure specific tokens
-    <token_name>:
-      source: ...  # Specify embedding source
-      force: false # Optional: force this embedding for all models
-  pad_to_multiple_of: null  # Optional: pad vocabulary size
+merge_method: ota
+base_model: meta-llama/Meta-Llama-3.1-8B
+
+parameters:
+  # Global OTA parameters
+  epsilon: 1e-26                      # Numerical stability for preconditioner
+  normalise: none                     # Options: none, mean, sum
+  power: 0.5                         # Preconditioner power (0.5 = sqrt, 1.0 = linear)
+  fallback_to_base: true             # Use base weights when parameters are masked
+  rescale: false                     # Rescale task vectors after masking
+  approximate_norm: false            # Use approximate rescaling (faster)
+  rescale_relative_threshold: 0.1    # Threshold for rescaling (if rescale=true)
+  
+  # Optional: Post-FFG merge strategy
+  # masked_task_vector_merge_method: linear  # Options: precond, linear, ties
+
+models:
+  - model: pmahdavi/Llama-3.1-8B-math-reasoning
+    parameters:
+      # REQUIRED: Path to optimizer second moments
+      preconditioner_path: pmahdavi/Llama-3.1-8B-math-reasoning/export/exp_avg_sq.safetensors
+      
+      # FFG threshold - determines masking aggressiveness
+      precond_threshold: 2.626e-19     # Lower = more parameters kept
+      
+      # Optional: Memory-efficient rank-1 approximation
+      rank1_approx: true              # Uses AdaFactor-style compression
+      # rank: 16                      # Alternative: specify rank directly
+      
+  - model: pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4
+    parameters:
+      preconditioner_path: pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4/export_full_state_checkpoint-1100/exp_avg_sq.safetensors
+      precond_threshold: 1.1152e-18
+
+dtype: bfloat16
+tokenizer_source: union
 ```
 
-##### Tokenizer Source
+#### Key OTA Parameters Explained:
 
-The `source` field determines the vocabulary of the output model:
+1. **`preconditioner_path`** (required): Path to the Adam optimizer's second moments (`exp_avg_sq.safetensors`). Can be:
+   - HuggingFace format: `model_id/path/to/file` or `model_id:path/to/file`
+   - Local path: `/absolute/path/to/exp_avg_sq.safetensors`
 
-- `union`: Combine vocabularies from all input models (default)
-- `base`: Use vocabulary from the base model
-- `"path/to/model"`: Use vocabulary from a specific model
+2. **`precond_threshold`**: Controls FFG sparsity. Parameters with saliency below this threshold are masked.
+   - Lower values = more parameters retained
+   - Can be global (in `parameters`) or per-model
 
-##### Token Embedding Handling
+3. **`power`**: Exponent applied to preconditioner values
+   - `0.5` (default): Square root scaling, standard for Adam-based preconditioning
+   - `1.0`: Linear scaling, uses raw second moments
 
-When merging models with different vocabularies, mergekit uses smart defaults to handle token embeddings:
+4. **`rank1_approx`**: Memory-efficient compression using AdaFactor-style approximation
+   - Reduces storage from O(mn) to O(m+n) per parameter matrix
 
-- If a token exists in the base model, its embedding is used as the default
-- If only one model has the token, that model's embedding is used
-- Otherwise, an average of all available embeddings is used
+5. **`fallback_to_base`**: Use base model values for masked parameters (default: true)
 
-You can override these defaults for specific tokens:
+6. **`masked_task_vector_merge_method`**: Post-FFG merge strategy. Options:
+   - `precond` (default): Merges masked task vectors using a weighted average based on the preconditioner values.
+   - `linear`: Performs a simple, unweighted average of the masked task vectors.
+   - `ties`: Applies the TIES-merging algorithm (trim, elect, disentangle) to the masked task vectors.
 
+### Baseline Method Configurations
+
+For other merging methods, refer to the [original mergekit documentation](https://github.com/arcee-ai/mergekit#merge-methods). Here are quick examples:
+
+**Linear (Simple Averaging):**
 ```yaml
-tokenizer:
-  source: union
-  tokens:
-    # Use embedding from a specific model
-    <|im_start|>:
-      source: "path/to/chatml/model"
-
-    # Force a specific embedding for all models
-    <|special|>:
-      source: "path/to/model"
-      force: true
-
-    # Map a token to another model's token embedding
-    <|renamed_token|>:
-      source:
-        kind: "model_token"
-        model: "path/to/model"
-        token: "<|original_token|>"  # or use token_id: 1234
+merge_method: linear
+models:
+  - model: model1
+    parameters:
+      weight: 1.0  # Equal weights
+  - model: model2
+    parameters:
+      weight: 1.0
 ```
 
-##### Practical Example
-
-Here's how you might preserve both Llama 3 Instruct and ChatML prompt formats when merging models:
-
+**TIES:**
 ```yaml
-tokenizer:
-  source: union
-  tokens:
-    # ChatML tokens
-    <|im_start|>:
-      source: "chatml_model"
-    <|im_end|>:
-      source: "chatml_model"
-
-    # Llama 3 tokens - force original embeddings
-    <|start_header_id|>:
-      source: "llama3_model"
-      force: true
-    <|end_header_id|>:
-      source: "llama3_model"
-      force: true
-    <|eot_id|>:
-      source: "llama3_model"
-      force: true
+merge_method: ties
+base_model: meta-llama/Meta-Llama-3.1-8B
+parameters:
+  density: 0.5    # Fraction of parameters to keep
+  weight: 1.0     # Model weighting
+models:
+  - model: model1
+    parameters:
+      density: 0.45  # Can override per-model
 ```
 
-#### Legacy Configuration (tokenizer_source)
-
-For backward compatibility, the `tokenizer_source` field is still supported:
-
+**DARE:**
 ```yaml
-tokenizer_source: "union"  # or "base" or a model path
+merge_method: dare_ties  # or dare_linear
+base_model: meta-llama/Meta-Llama-3.1-8B
+parameters:
+  density: 0.95   # High density = less pruning
 ```
 
-This provides basic tokenizer selection but lacks the fine-grained control of the modern `tokenizer` field.
+### Configuration Tips
 
-### Chat Template Configuration
+1. **Finding Optimal Thresholds**: Run FFG at various densities, evaluate the grafted models, and choose the smallest density that maintains expert performance. Extract the threshold from `statistics.json` in the FFG output directory (see surgeon repo for details).
 
-The optional `chat_template` field allows overriding the chat template used for the merged model.
+2. **Memory Optimization**: Enable `rank1_approx: true` for large models to reduce memory footprint.
 
-```yaml
-chat_template: "auto"  # or a template name or Jinja2 template
+3. **Debugging**: Use `--dry-run` to preview the full command before execution.
+
+4. **Path Formats**: Preconditioner paths can be HuggingFace (`model_id:path`) or absolute local paths.
+
+## Available Models
+
+All SFT models are fine-tuned from Meta-Llama-3.1-8B and available on HuggingFace:
+
+| Capability | Model ID | Preconditioner Path |
+|------------|----------|---------------------|
+| **Math Reasoning** | `pmahdavi/Llama-3.1-8B-math-reasoning` | `/export/exp_avg_sq.safetensors` |
+| **Coding** | `pmahdavi/Llama-3.1-8B-coding` | `/export/exp_avg_sq.safetensors` |
+| **Coding 2** | `pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4` | `/export_full_state_checkpoint-1100/exp_avg_sq.safetensors` |
+| **Precise IF** | `pmahdavi/Llama-3.1-8B-precise-if` | `/export/exp_avg_sq.safetensors` |
+| **General** | `pmahdavi/Llama-3.1-8B-general` | `/export/exp_avg_sq.safetensors` |
+| **Knowledge Recall** | `pmahdavi/Llama-3.1-8B-knowledge-recall` | `/export/exp_avg_sq.safetensors` |
+
+Access models at: https://huggingface.co/pmahdavi
+
+## How `run_merge.py` Works
+
+The `run_merge.py` script is a sophisticated wrapper that:
+
+1. **Parses YAML configs** to extract merge method and model names
+2. **Generates adaptive output names** based on:
+   - Merge method (e.g., `ota-ffg`, `dare_ties`)
+   - Model combinations (shortened names like `math-reasoning_coding`)
+   - Hyperparameters (e.g., `d0.5` for density, `precond-thresh2.6e-19`)
+3. **Handles both local and PBS execution**:
+   - Local: Runs mergekit directly with conda environment
+   - PBS: Generates optimized job scripts with proper resource allocation
+4. **Manages GPU memory** with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+5. **Supports dry runs** to preview commands before execution
+
+Example generated output directory:
+```
+ota-ffg_math-reasoning_coding_precise-if_general_knowledge-recall_precond-thresh-multi/
 ```
 
-Options include:
+## Method Overview
 
-- `"auto"`: Automatically select the most common template among input models
-- Built-in templates: `"alpaca"`, `"chatml"`, `"llama3"`, `"mistral"`, `"exaone"`
-- A Jinja2 template string for custom formatting
+OTA leverages Adam's second-moment estimates (`exp_avg_sq`) as a diagonal Fisher information proxy. The method operates in two stages:
 
-### Examples
+1. **Fast Fisher Grafting (FFG)**: Masks low-saliency parameter updates based on saliency score `s_i = H_ii * (Δw_i)²`
+2. **Curvature-Aware Aggregation**: Merges denoised models using preconditioner weighting
 
-Several examples of merge configurations are available in [`examples/`](examples/).
 
-## Merge Methods
+## Reproducing Paper Results
 
-A quick overview of the currently supported merge methods:
+To reproduce the results from our paper:
 
-| Method                                                                                           | `merge_method` value | Multi-Model | Uses base model |
-| ------------------------------------------------------------------------------------------------ | -------------------- | ----------- | --------------- |
-| Linear ([Model Soups](https://arxiv.org/abs/2203.05482))                                         | `linear`             | ✅           | ❌               |
-| SLERP                                                                                            | `slerp`              | ❌           | ✅               |
-| Nearswap                                                                                         | `nearswap`           | ❌           | ✅               |
-| [Task Arithmetic](https://arxiv.org/abs/2212.04089)                                              | `task_arithmetic`    | ✅           | ✅               |
-| [TIES](https://arxiv.org/abs/2306.01708)                                                         | `ties`               | ✅           | ✅               |
-| [DARE](https://arxiv.org/abs/2311.03099) [TIES](https://arxiv.org/abs/2306.01708)                | `dare_ties`          | ✅           | ✅               |
-| [DARE](https://arxiv.org/abs/2311.03099) [Task Arithmetic](https://arxiv.org/abs/2212.04089)     | `dare_linear`        | ✅           | ✅               |
-| Passthrough                                                                                      | `passthrough`        | ❌           | ❌               |
-| [Model Breadcrumbs](https://arxiv.org/abs/2312.06795)                                            | `breadcrumbs`        | ✅           | ✅               |
-| [Model Breadcrumbs](https://arxiv.org/abs/2312.06795) + [TIES](https://arxiv.org/abs/2306.01708) | `breadcrumbs_ties`   | ✅           | ✅               |
-| [Model Stock](https://arxiv.org/abs/2403.19522)                                                  | `model_stock`        | ✅           | ✅               |
-| NuSLERP                                                                                          | `nuslerp`            | ❌           | ✅               |
-| [DELLA](https://arxiv.org/abs/2406.11617)                                                        | `della`              | ✅           | ✅               |
-| [DELLA](https://arxiv.org/abs/2406.11617) [Task Arithmetic](https://arxiv.org/abs/2212.04089)    | `della_linear`       | ✅           | ✅               |
-| [SCE](https://arxiv.org/abs/2408.07990)                                                          | `sce`                | ✅           | ✅               |
+```bash
+# Main OTA+FFG results
+python run_merge.py configs/hf_ota_ffg_per_model_thresh.yml --local
 
-### Linear
+# Rank-1 approximation comparison
+python run_merge.py configs/hf_ota_ffg_rank1lemma.yml --local
 
-The classic merge method - a simple weighted average.
-
-Parameters:
-
-- `weight` - relative (or absolute if `normalize=False`) weighting of a given tensor
-- `normalize` - if true, the weights of all models contributing to a tensor will be normalized. Default behavior.
-
-### SLERP
-
-Spherically interpolate the parameters of two models. One must be set as `base_model`.
-
-Parameters:
-
-- `t` - interpolation factor. At `t=0` will return `base_model`, at `t=1` will return the other one.
-
-### Nearswap
-
-Interpolates base model with secondary model if similarity is below t. Accepts two models.
-
-Parameters:
-
-- `t` - similarity threshold
-
-### [Task Arithmetic](https://arxiv.org/abs/2212.04089)
-
-Computes "task vectors" for each model by subtracting a base model. Merges the task vectors linearly and adds back the base. Works great for models that were fine tuned from a common ancestor. Also a super useful mental framework for several of the more involved merge methods.
-
-Parameters: same as [Linear](#linear), plus:
-- `lambda` - scaling factor applied after weighted sum of task vectors
-
-### [TIES](https://arxiv.org/abs/2306.01708)
-
-Builds on the task arithmetic framework. Resolves interference between models by sparsifying the task vectors and applying a sign consensus algorithm. Allows you to merge a larger number of models and retain more of their strengths.
-
-Parameters: same as [Task Arithmetic](#task-arithmetic), plus:
-
-- `density` - fraction of weights in differences from the base model to retain
-
-### [DARE](https://arxiv.org/abs/2311.03099)
-
-In the same vein as TIES, sparsifies task vectors to reduce interference. Differs in that DARE uses random pruning with a novel rescaling to better match performance of the original models. DARE can be used either with the sign consensus algorithm of TIES (`dare_ties`) or without (`dare_linear`).
-
-Parameters: same as [TIES](#ties) for `dare_ties`, or [Linear](#linear) for `dare_linear`
-
-### Passthrough
-
-`passthrough` is a no-op that simply passes input tensors through unmodified. It is meant to be used for layer-stacking type merges where you have only one input model. Useful for frankenmerging.
-
-### [Model Breadcrumbs](https://arxiv.org/abs/2312.06795)
-
-An extension of task arithmetic that discards both small and extremely large differences from the base model. As with DARE, the Model Breadcrumbs algorithm can be used with (`breadcrumbs_ties`) or without (`breadcrumbs`) the sign consensus algorithm of TIES.
-
-Parameters: same as [Task Arithmetic](#task-arithmetic), plus:
-
-- `density` - fraction of weights in differences from the base model to retain
-- `gamma` - fraction of largest magnitude differences to remove
-
-Note that `gamma` corresponds with the parameter `β` described in the paper, while `density` is the final density of the sparsified tensors (related to `γ` and `β` by `density = 1 - γ - β`). For good default values, try `density: 0.9` and `gamma: 0.01`.
-
-### [Model Stock](https://arxiv.org/abs/2403.19522)
-
-Uses some neat geometric properties of fine tuned models to compute good weights for linear interpolation. Requires at least three models, including a base model.
-
-Parameters:
-
-- `filter_wise`: if true, weight calculation will be per-row rather than per-tensor. Not recommended.
-
-### NuSLERP
-
-Spherically interpolate between parameters, but with more options and more sensical configuration! Does not require a base model, but can use one to do spherical interpolation of task vectors. Only works with either two models or two plus a base model.
-
-Parameters:
-
-- `weight`: relative weighting of a given tensor
-- `nuslerp_flatten`: set to false to do row-wise/column-wise interpolation instead of treating tensors as vectors
-- `nuslerp_row_wise`: SLERP row vectors instead of column vectors
-
-To replicate the behavior of the original `slerp` method, set `weight` to `1-t` and `t` for your first and second model respectively.
-
-### [DELLA](https://arxiv.org/abs/2406.11617)
-
-Building upon DARE, DELLA uses adaptive pruning based on parameter magnitudes. DELLA first ranks parameters in each row of delta parameters and assigns drop probabilities inversely proportional to their magnitudes. This allows it to retain more important changes while reducing interference. After pruning, it rescales the remaining parameters similar to [DARE](#dare). DELLA can be used with (`della`) or without (`della_linear`) the sign elect step of TIES
-
-Parameters: same as [Task Arithmetic](#task-arithmetic), plus:
-
-- `density` - fraction of weights in differences from the base model to retain
-- `epsilon` - maximum change in drop probability based on magnitude. Drop probabilities assigned will range from `density - epsilon` to `density + epsilon`. (When selecting values for `density` and `epsilon`, ensure that the range of probabilities falls within 0 to 1)
-
-### [SCE](https://arxiv.org/abs/2408.07990)
-
-SCE introduces adaptive matrix-level merging weights based on parameter variances. SCE first selects the top-k% elements from each parameter matrix that exhibit high variance across all delta parameters. Following this selection, SCE calculates matrix-level merging weights based on the sum of squares of elements in the delta parameters. Finally, it erases minority elements, a step similar to the sign election process in TIES.
-
-Parameters: same as [TIES](#ties), plus:
-
-- `select_topk` - fraction of elements with the highest variance in the delta parameters to retain.
-
-## LoRA extraction
-
-Mergekit allows extracting PEFT-compatible low-rank approximations of finetuned models.
-
-### Usage
-
-```sh
-mergekit-extract-lora --model finetuned_model_id_or_path --base-model base_model_id_or_path --out-path output_path [--no-lazy-unpickle] [--cuda] [--max-rank=desired_rank] [--sv-epsilon=tol]
+# Baseline comparisons
+python run_merge.py configs/latest_llama_factory_linear.yml --local
+python run_merge.py configs/latest_llama_factory_ties.yml --local
+python run_merge.py configs/latest_llama_factory_dare.yml --local
+python run_merge.py configs/latest_llama_factory_breadcrumbs_ties.yml --local
 ```
 
-## Mixture of Experts merging
+## Visualizations and Analysis
 
-The `mergekit-moe` script supports merging multiple dense models into a mixture of experts, either for direct use or for further training. For more details see the [`mergekit-moe` documentation](docs/moe.md).
+For detailed FFG implementation, task vector localization visualizations, and curvature analysis, see the surgeon repository: https://github.com/pmahdavi/surgeon.git
 
-## Evolutionary merge methods
+The surgeon repo provides:
+- Complete FFG implementation and grafting experiments
+- Task vector density and localization visualizations
+- Curvature heatmap generation
+- Mask overlap and sparsity distribution analysis
+- Layer-wise and parameter-type breakdowns
 
-See [`docs/evolve.md`](docs/evolve.md) for details.
+## Evaluation
 
-## ✨ Merge in the Cloud ✨
+We use a forked version of [OLMES (Open Language Model Evaluation System)](https://github.com/allenai/olmes) for evaluating merged models. The evaluation suite includes all benchmarks reported in our paper. 
 
-We host merging on Arcee's cloud GPUs - you can launch a cloud merge in the [Arcee App](https://app.arcee.ai). Or through python - grab an ARCEE_API_KEY:
+To evaluate your merged models:
+1. Use the checkpoints produced by this mergekit repository
+2. Follow the evaluation instructions in our OLMES fork
 
-`export ARCEE_API_KEY=<your-api-key>`
-`pip install -q arcee-py`
-
-```python
-import arcee
-arcee.merge_yaml("bio-merge","./examples/bio-merge.yml")
-```
-
-Check your merge status at the [Arcee App](https://app.arcee.ai)
-
-When complete, either deploy your merge:
-
-```python
-arcee.start_deployment("bio-merge", merging="bio-merge")
-```
-
-Or download your merge:
-
-`!arcee merging download bio-merge`
 
 ## Citation
 
-If you find `mergekit` useful in your research, please consider citing the [paper](https://aclanthology.org/2024.emnlp-industry.36/):
+If you use OTA-Merge in your research, please cite:
+
+```bibtex
+@misc{mahdavinia2025harnessingoptimizationdynamicscurvatureinformed,
+      title={Harnessing Optimization Dynamics for Curvature-Informed Model Merging}, 
+      author={Pouria Mahdavinia and Hamed Mahdavi and Niloofar Mireshghallah and Mehrdad Mahdavi},
+      year={2025},
+      eprint={2509.11167},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2509.11167}, 
+}
+```
+
+For the underlying mergekit framework:
 
 ```bibtex
 @inproceedings{goddard-etal-2024-arcees,
@@ -421,6 +314,9 @@ If you find `mergekit` useful in your research, please consider citing the [pape
     url = "https://aclanthology.org/2024.emnlp-industry.36",
     doi = "10.18653/v1/2024.emnlp-industry.36",
     pages = "477--485",
-    abstract = "The rapid growth of open-source language models provides the opportunity to merge model checkpoints, combining their parameters to improve performance and versatility. Advances in transfer learning have led to numerous task-specific models, which model merging can integrate into powerful multitask models without additional training. MergeKit is an open-source library designed to support this process with an efficient and extensible framework suitable for any hardware. It has facilitated the merging of thousands of models, contributing to some of the world{'}s most powerful open-source model checkpoints. The library is accessible at: https://github.com/arcee-ai/mergekit.",
 }
 ```
+
+## License
+
+This project builds upon mergekit and is released under the same license. See LICENSE for details.

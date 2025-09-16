@@ -59,7 +59,9 @@ endif
 # The 'conda run' command will be used instead of 'conda activate' for better
 # reliability in non-interactive shells.
 if (-e $HOME/miniconda3/bin/conda) then
-    eval `$HOME/miniconda3/bin/conda shell.tcsh hook`
+    # eval `$HOME/miniconda3/bin/conda shell.tcsh hook`
+    # Avoid the problematic tcsh hook by setting PATH directly
+    setenv PATH "$HOME/miniconda3/bin:$PATH"
 else
     echo "Warning: Conda not found, attempting to run mergekit directly."
 endif
@@ -345,6 +347,8 @@ def main():
                         help='Disable the --trust-remote-code flag')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show the PBS script and job details without submitting the job')
+    parser.add_argument('--local', action='store_true',
+                        help='Run the merge command directly without submitting a PBS job')
     
     args = parser.parse_args()
     
@@ -366,6 +370,73 @@ def main():
     
     # Create the full output directory path
     output_dir = os.path.join(args.output_dir, merge_name)
+    
+    # If --local is specified, run the merge command directly
+    if args.local:
+        print("--- Running mergekit locally ---")
+        
+        # Determine command line options
+        options_list = ["--cuda", "-v"]
+        if not args.no_allow_crimes:
+            options_list.append("--allow-crimes")
+        if not args.no_trust_remote_code:
+            options_list.append("--trust-remote-code")
+
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Output will be saved to: {output_dir}")
+        
+        # Construct the command
+        command = ["conda", "run", "-n", "mergekit", "mergekit-yaml"] + \
+                  options_list + [args.config_file, output_dir]
+        
+        # If dry-run is also specified for local mode, just print the command and exit
+        if args.dry_run:
+            print("\n" + "="*80)
+            print("DRY RUN MODE (LOCAL) - NO COMMAND WILL BE EXECUTED")
+            print("="*80 + "\n")
+            print("The following command would be executed:")
+            print(" ".join(command))
+            print("\nTo run this for real, use the --local flag without --dry-run.")
+            print("="*80 + "\n")
+            return
+
+        print(f"\nExecuting command:")
+        print(" ".join(command))
+        print("-" * 40, flush=True)
+
+        try:
+            # Execute the command and stream output
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            if process.stdout:
+                for line in iter(process.stdout.readline, ''):
+                    print(line, end='', flush=True)
+            
+            process.wait()
+            
+            print("-" * 40, flush=True)
+            if process.returncode == 0:
+                print(f"✓ Merge completed successfully!")
+                print(f"Output directory: {output_dir}")
+            else:
+                print(f"✗ Merge failed with return code {process.returncode}")
+            
+            return # Exit after local run
+            
+        except FileNotFoundError:
+            print("\nError: 'conda' command not found.")
+            print("Please ensure Conda is installed and the 'conda' command is in your PATH.")
+            return
+        except Exception as e:
+            print(f"\nAn unexpected error occurred: {e}")
+            return
     
     # Make sure the directory for PBS output exists
     os.makedirs("pbs_results", exist_ok=True)
