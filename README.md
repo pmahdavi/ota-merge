@@ -267,7 +267,7 @@ The surgeon repo provides:
 
 ## Evaluation
 
-We use a forked version of [OLMES (Open Language Model Evaluation System)](https://github.com/allenai/olmes) for evaluating merged models. The evaluation suite includes all benchmarks reported in our paper. 
+We use [OLMES (Open Language Model Evaluation System)](https://github.com/pmahdavi/olmes) for evaluating merged models. The evaluation suite includes all benchmarks reported in our paper. 
 
 To evaluate your merged models:
 1. Use the checkpoints produced by this mergekit repository
