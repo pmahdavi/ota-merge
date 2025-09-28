@@ -13,6 +13,33 @@ This repository implements **OTA (Optimization Trajectory Aware) Merging**, a no
 - **Multiple Methods**: OTA, Linear, TIES, DARE, and Breadcrumbs implementations
 - **Production Ready**: Local execution and PBS cluster support
 
+## Artifacts
+
+### Available Checkpoints
+
+All SFT models are fine-tuned from Meta-Llama-3.1-8B and available on HuggingFace:
+
+| Capability | Model ID | Preconditioner Path |
+|------------|----------|---------------------|
+| **Math Reasoning** | `pmahdavi/Llama-3.1-8B-math-reasoning` | `/export/exp_avg_sq.safetensors` |
+| **Coding** | `pmahdavi/Llama-3.1-8B-coding` | `/export/exp_avg_sq.safetensors` |
+| **Coding 2** | `pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4` | `/export_full_state_checkpoint-1100/exp_avg_sq.safetensors` |
+| **Precise IF** | `pmahdavi/Llama-3.1-8B-precise-if` | `/export/exp_avg_sq.safetensors` |
+| **General** | `pmahdavi/Llama-3.1-8B-general` | `/export/exp_avg_sq.safetensors` |
+| **Knowledge Recall** | `pmahdavi/Llama-3.1-8B-knowledge-recall` | `/export/exp_avg_sq.safetensors` |
+
+Access models at: https://huggingface.co/pmahdavi
+
+### Release Artifacts
+
+The [v1.0.0-rc.1 release](https://github.com/pmahdavi/ota-merge/releases/tag/v1.0.0-rc.1) includes the following analysis PDFs:
+
+- **[`FFG_SFT_Localization.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/FFG_SFT_Localization.pdf)** - Visualization of Fast Fisher Grafting task localization across different SFT models.
+- **[`all_layers_weights_curvature_grid_math_vs_code.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/all_layers_weights_curvature_grid_math_vs_code.pdf)** - Layer-wise curvature comparison of math and coding SFT checkpoints.
+- **[`all_layers_weights_curvature_grid_code_vs_code2.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/all_layers_weights_curvature_grid_code_vs_code2.pdf)** - Layer-wise curvature comparison between two coding SFT models (cosine vs. WSD schedules).
+
+
+
 ## Installation
 
 ```bash
@@ -193,21 +220,6 @@ parameters:
 
 4. **Path Formats**: Preconditioner paths can be HuggingFace (`model_id:path`) or absolute local paths.
 
-## Available Models
-
-All SFT models are fine-tuned from Meta-Llama-3.1-8B and available on HuggingFace:
-
-| Capability | Model ID | Preconditioner Path |
-|------------|----------|---------------------|
-| **Math Reasoning** | `pmahdavi/Llama-3.1-8B-math-reasoning` | `/export/exp_avg_sq.safetensors` |
-| **Coding** | `pmahdavi/Llama-3.1-8B-coding` | `/export/exp_avg_sq.safetensors` |
-| **Coding 2** | `pmahdavi/Llama-3.1-8B-coding-tulu3-ebs128-lr5e6-wsdcr0p4` | `/export_full_state_checkpoint-1100/exp_avg_sq.safetensors` |
-| **Precise IF** | `pmahdavi/Llama-3.1-8B-precise-if` | `/export/exp_avg_sq.safetensors` |
-| **General** | `pmahdavi/Llama-3.1-8B-general` | `/export/exp_avg_sq.safetensors` |
-| **Knowledge Recall** | `pmahdavi/Llama-3.1-8B-knowledge-recall` | `/export/exp_avg_sq.safetensors` |
-
-Access models at: https://huggingface.co/pmahdavi
-
 ## How `run_merge.py` Works
 
 The `run_merge.py` script is a sophisticated wrapper that:
@@ -270,7 +282,7 @@ The surgeon repo provides:
 We use [OLMES (Open Language Model Evaluation System)](https://github.com/pmahdavi/olmes) for evaluating merged models. The evaluation suite includes all benchmarks reported in our paper. 
 
 To evaluate your merged models:
-1. Use the checkpoints produced by this mergekit repository
+1. Use the merged models produced by this repository or the checkpoints listed in the [Artifacts](#artifacts) section
 2. Follow the evaluation instructions in our OLMES fork
 
 
