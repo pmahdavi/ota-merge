@@ -29,7 +29,6 @@ All SFT models are fine-tuned from Meta-Llama-3.1-8B and available on HuggingFac
 | **Knowledge Recall** | `pmahdavi/Llama-3.1-8B-knowledge-recall` | `/export/exp_avg_sq.safetensors` |
 
 Access models at: https://huggingface.co/pmahdavi
- * `all_layers_curv_FFG40dense.pdf` — Combined Layer-wise curvature comparison with 40% density FFG masking  
 ### Release Artifacts
 
 The [v1.0.0-rc.1 release](https://github.com/pmahdavi/ota-merge/releases/tag/v1.0.0-rc.1) includes the following analysis PDFs:
