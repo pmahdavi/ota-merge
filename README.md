@@ -29,7 +29,7 @@ All SFT models are fine-tuned from Meta-Llama-3.1-8B and available on HuggingFac
 | **Knowledge Recall** | `pmahdavi/Llama-3.1-8B-knowledge-recall` | `/export/exp_avg_sq.safetensors` |
 
 Access models at: https://huggingface.co/pmahdavi
-
+ * `all_layers_curv_FFG40dense.pdf` — Combined Layer-wise curvature comparison with 40% density FFG masking  
 ### Release Artifacts
 
 The [v1.0.0-rc.1 release](https://github.com/pmahdavi/ota-merge/releases/tag/v1.0.0-rc.1) includes the following analysis PDFs:
@@ -37,6 +37,7 @@ The [v1.0.0-rc.1 release](https://github.com/pmahdavi/ota-merge/releases/tag/v1.
 - **[`FFG_SFT_Localization.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/FFG_SFT_Localization.pdf)** - Visualization of Fast Fisher Grafting task localization across different SFT models.
 - **[`all_layers_weights_curvature_grid_math_vs_code.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/all_layers_weights_curvature_grid_math_vs_code.pdf)** - Layer-wise curvature comparison of math and coding SFT checkpoints.
 - **[`all_layers_weights_curvature_grid_code_vs_code2.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/all_layers_weights_curvature_grid_code_vs_code2.pdf)** - Layer-wise curvature comparison between two coding SFT models (cosine vs. WSD schedules).
+- - **[`all_layers_curv_FFG40dense.pdf`](https://github.com/pmahdavi/ota-merge/releases/download/v1.0.0-rc.1/all_layers_curv_FFG40dense.pdf)** - Combined Layer-wise curvature comparison with 40% density FFG masking.
 
 
 
